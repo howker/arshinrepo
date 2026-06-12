@@ -12,9 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml /app/pyproject.toml
-RUN pip install --upgrade pip && pip install -e .[dev]
-
 COPY . /app
+
+RUN pip install --upgrade pip && pip install -e .[dev]
 
 RUN chmod +x /app/docker/app/entrypoint.sh
