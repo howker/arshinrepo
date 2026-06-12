@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     arshin_max_retries: int = Field(default=4, alias="ARSHIN_MAX_RETRIES")
 
     default_template_code: str = Field(default="default", alias="DEFAULT_TEMPLATE_CODE")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+
 
     @property
     def database_url(self) -> str:
