@@ -8,6 +8,7 @@ from app.models.user import User
 from app.models.file_object import FileObject
 from app.models.job import Job
 from app.models.enums import FileObjectType, JobStatus
+from app.workers.tasks import process_excel_job
 
 logger = logging.getLogger(__name__)
 
@@ -62,5 +63,8 @@ def process_job_upload(
     db.add(job)
     db.commit()
     db.refresh(job)
+
+    # Отправляем задачу в фоновый воркер Celery
+    process_excel_job.delay(str(job.id))
 
     return job
