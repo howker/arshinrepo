@@ -17,3 +17,6 @@ build/
 .DS_Store
 
 celerybeat-schedule
+
+node_modules/
+*.tsbuildinfo
