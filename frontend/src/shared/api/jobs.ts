@@ -18,5 +18,17 @@ export const jobsApi = {
   getJobDetails: async (id: string): Promise<Job> => {
     const response = await apiClient.get(`/jobs/${id}`);
     return response.data;
+  },
+  uploadJob: async (file: File, templateCode: string = 'pril_1_main'): Promise<Job> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('template_code', templateCode);
+    
+    const response = await apiClient.post('/jobs/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
   }
 };
