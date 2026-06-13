@@ -18,7 +18,7 @@ export function LoginPage() {
     setIsLoading(true);
 
     try {
-      // FastAPI OAuth2PasswordRequestForm ожидает x-www-form-urlencoded, а поле логина называется 'username'
+      // FastAPI OAuth2PasswordRequestForm ожидает x-www-form-urlencoded
       const formData = new URLSearchParams();
       formData.append('username', email);
       formData.append('password', password);
@@ -43,18 +43,12 @@ export function LoginPage() {
       <div className="page-header">
         <span className="eyebrow">Auth</span>
         <h1 className="page-title">Вход в систему</h1>
-        <p className="muted">
-          Введите email и пароль для доступа к системе.
-        </p>
+        <p className="muted">Введите email и пароль для доступа.</p>
       </div>
 
       <div className="card form-card">
         <form className="form-grid" onSubmit={handleLogin}>
-          {error && (
-            <div style={{ color: '#ef4444', fontSize: '14px', marginBottom: '8px' }}>
-              {error}
-            </div>
-          )}
+          {error && <div style={{ color: '#ef4444', fontSize: '14px' }}>{error}</div>}
           
           <label className="field">
             <span className="field-label">Email</span>
