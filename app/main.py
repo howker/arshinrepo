@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 from fastapi import FastAPI
 
-from app.api.router import api_router
-from app.core.config import settings
+from app.api.health import router as health_router
+from app.api.router import apirouter
+from app.core.config import get_settings
 from app.core.logging import configure_logging
 
+settings = get_settings()
 configure_logging()
 
 app = FastAPI(
@@ -14,7 +18,8 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-app.include_router(api_router)
+app.include_router(health_router, tags=["health"])
+app.include_router(apirouter, prefix=settings.api_prefix)
 
 
 @app.get("/")

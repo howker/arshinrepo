@@ -1,28 +1,5 @@
-from collections.abc import Generator
+from __future__ import annotations
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from app.core.database import Base, SessionLocal, engine, get_db, getdb
 
-from app.core.config import settings
-
-engine = create_engine(
-    settings.database_url,
-    pool_pre_ping=True,
-    future=True,
-)
-
-SessionLocal = sessionmaker(
-    bind=engine,
-    class_=Session,
-    autocommit=False,
-    autoflush=False,
-    expire_on_commit=False,
-)
-
-
-def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+__all__ = ["Base", "engine", "SessionLocal", "get_db", "getdb"]
