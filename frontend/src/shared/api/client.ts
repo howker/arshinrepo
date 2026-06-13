@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-// Используем относительный путь для работы через Nginx в будущем
+// Используем относительный путь, так как Nginx сам проксирует /api/ на бэкенд
 export const apiClient = axios.create({
   baseURL: '/api',
   headers: {
@@ -8,8 +8,7 @@ export const apiClient = axios.create({
   },
 });
 
-// Интерцептор для добавления токена (пока берем напрямую из localStorage, 
-// позже переделаем через Zustand для реактивности)
+// Интерцептор для добавления токена авторизации
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem('access_token');
   if (token) {
