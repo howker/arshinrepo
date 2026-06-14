@@ -13,7 +13,7 @@ export function JobDetailsPage() {
     if (!jobId) return;
 
     let isMounted = true;
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: ReturnType<typeof setTimeout>;
 
     const fetchJob = async () => {
       try {
