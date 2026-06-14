@@ -18,7 +18,6 @@ export function LoginPage() {
     setIsLoading(true);
 
     try {
-      // FastAPI OAuth2PasswordRequestForm ожидает x-www-form-urlencoded
       const formData = new URLSearchParams();
       formData.append('username', email);
       formData.append('password', password);
@@ -32,7 +31,16 @@ export function LoginPage() {
       setToken(response.data.access_token);
       navigate('/dashboard');
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка авторизации. Проверьте данные.');
+      const detail = err.response?.data?.detail;
+      
+      // Защита от белого экрана: правильно парсим ответ FastAPI
+      if (typeof detail === 'string') {
+        setError(detail);
+      } else if (Array.isArray(detail)) {
+        setError(`Ошибка формата: ${detail[0].loc.join(' -> ')} (${detail[0].msg})`);
+      } else {
+        setError('Сервер отклонил запрос. Проверьте консоль.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -48,7 +56,11 @@ export function LoginPage() {
 
       <div className="card form-card">
         <form className="form-grid" onSubmit={handleLogin}>
-          {error && <div style={{ color: '#ef4444', fontSize: '14px' }}>{error}</div>}
+          {error && (
+            <div style={{ color: '#ef4444', fontSize: '14px', padding: '12px', backgroundColor: '#fee2e2', borderRadius: '6px', border: '1px solid #fca5a5' }}>
+              {error}
+            </div>
+          )}
           
           <label className="field">
             <span className="field-label">Email</span>
