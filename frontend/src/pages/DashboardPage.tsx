@@ -27,7 +27,7 @@ export function DashboardPage() {
 
     try {
       const newJob = await jobsApi.uploadJob(file, 'pril_1_main');
-      // После успешной загрузки сразу переводим пользователя на страницу деталей задачи
+      // После успешной загрузки направляем на страницу деталей (пока это заглушка)
       navigate(`/jobs/${newJob.id}`);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Ошибка при загрузке файла. Проверьте соединение.');
@@ -46,11 +46,19 @@ export function DashboardPage() {
         </p>
       </div>
 
-      <div className="card form-card">
+      <div className="stat-grid">
+        <article className="stat-card">
+          <span className="stat-label">Связь с API</span>
+          <strong className="stat-value" style={{ color: 'var(--primary)' }}>Ready</strong>
+          <span className="muted">Система готова к приему файлов</span>
+        </article>
+      </div>
+
+      <div className="card form-card" style={{ marginTop: '24px' }}>
         <h2 className="section-title">Новая проверка</h2>
         <form className="form-grid" onSubmit={handleUpload}>
           {error && <div style={{ color: '#ef4444', fontSize: '14px' }}>{error}</div>}
-          
+
           <label className="field">
             <span className="field-label">Excel файл (Приложение №1)</span>
             <input 
