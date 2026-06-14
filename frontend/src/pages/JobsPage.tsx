@@ -1,84 +1,93 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { jobsApi, Job } from '../shared/api/jobs';
-import { useAuthStore } from '../features/auth/store';
 
 export function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const navigate = useNavigate();
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      navigate('/login');
-      return;
-    }
-
     const fetchJobs = async () => {
       try {
         const data = await jobsApi.getJobs();
-        setJobs(data);
+        // Сортируем так, чтобы новые задачи были сверху
+        const sorted = data.sort((a, b) => {
+          if (!a.created_at || !b.created_at) return 0;
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        });
+        setJobs(sorted);
       } catch (err: any) {
-        setError('Не удалось загрузить список задач.');
-        if (err.response?.status === 401) {
-          navigate('/login');
-        }
+        setError(err.response?.data?.detail || 'Ошибка при загрузке списка задач');
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchJobs();
-  }, [isAuthenticated, navigate]);
+  }, []);
 
   return (
     <section className="page">
       <div className="page-header">
-        <span className="eyebrow">Jobs</span>
-        <h1 className="page-title">Список проверок</h1>
-        <p className="muted">
-          Реальные данные из базы данных PostgreSQL.
-        </p>
+        <span className="eyebrow">History</span>
+        <h1 className="page-title">История проверок</h1>
+        <p className="muted">Список всех загруженных файлов и их статусы.</p>
       </div>
 
       <div className="card">
-        {error && <div style={{ color: '#ef4444', marginBottom: '16px' }}>{error}</div>}
-        
         {isLoading ? (
           <p className="muted">Загрузка данных...</p>
+        ) : error ? (
+          <div style={{ color: '#ef4444' }}>{error}</div>
         ) : jobs.length === 0 ? (
-          <p className="muted">У вас пока нет загруженных задач. Перейдите на Dashboard для загрузки.</p>
+          <p className="muted">Вы еще не загружали файлы. Перейдите в Dashboard для создания первой проверки.</p>
         ) : (
-          <div className="table-like">
-            <div className="table-row table-head">
-              <span>Файл</span>
-              <span>Прогресс</span>
-              <span>Ошибки</span>
-              <span>Статус</span>
-              <span>Действие</span>
-            </div>
-
-            {jobs.map((job) => (
-              <div className="table-row" key={job.id}>
-                <span>{job.original_filename}</span>
-                <span className="muted">{job.processed_items} / {job.total_items}</span>
-                <span style={{ color: job.issue_count > 0 ? '#ef4444' : 'inherit' }}>
-                  {job.issue_count}
-                </span>
-                <span>
-                  <span className={`badge ${job.status === 'failed' ? 'bg-red-100 text-red-800' : ''}`}>
-                    {job.status}
-                  </span>
-                </span>
-                <span>
-                  <Link className="link" to={`/jobs/${job.id}`}>
-                    Открыть
-                  </Link>
-                </span>
-              </div>
-            ))}
+          <div className="table-container" style={{ overflowX: 'auto' }}>
+            <table className="data-table" style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                  <th style={{ padding: '12px 8px' }}>Файл</th>
+                  <th style={{ padding: '12px 8px' }}>Статус</th>
+                  <th style={{ padding: '12px 8px' }}>Прогресс</th>
+                  <th style={{ padding: '12px 8px' }}>Ошибки</th>
+                  <th style={{ padding: '12px 8px' }}>Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.map((job) => (
+                  <tr key={job.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ padding: '12px 8px', fontWeight: 500 }}>{job.original_filename}</td>
+                    <td style={{ padding: '12px 8px' }}>
+                      <span style={{ 
+                        padding: '4px 8px', 
+                        borderRadius: '4px', 
+                        fontSize: '12px',
+                        backgroundColor: job.status === 'completed' ? '#dcfce7' : job.status === 'failed' ? '#fee2e2' : '#f3f4f6',
+                        color: job.status === 'completed' ? '#166534' : job.status === 'failed' ? '#991b1b' : '#1f2937'
+                      }}>
+                        {job.status}
+                      </span>
+                    </td>
+                    <td style={{ padding: '12px 8px' }}>
+                      {job.processed_items} / {job.total_items}
+                    </td>
+                    <td style={{ padding: '12px 8px' }}>
+                      {job.issue_count > 0 ? (
+                        <span style={{ color: '#ef4444', fontWeight: 600 }}>{job.issue_count}</span>
+                      ) : (
+                        <span className="muted">0</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '12px 8px' }}>
+                      <Link to={`/jobs/${job.id}`} style={{ color: 'var(--primary)', textDecoration: 'none', fontWeight: 500 }}>
+                        Подробнее
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
