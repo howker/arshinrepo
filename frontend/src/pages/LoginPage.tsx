@@ -18,26 +18,20 @@ export function LoginPage() {
     setIsLoading(true);
 
     try {
-      const formData = new URLSearchParams();
-      formData.append('username', email);
-      formData.append('password', password);
-
-      const response = await apiClient.post('/auth/login', formData, {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
+      // Отправляем классический JSON, так как бэкенд ждет Pydantic-модель
+      const response = await apiClient.post('/auth/login', {
+        email: email,
+        password: password
       });
 
       setToken(response.data.access_token);
       navigate('/dashboard');
     } catch (err: any) {
       const detail = err.response?.data?.detail;
-      
-      // Защита от белого экрана: правильно парсим ответ FastAPI
       if (typeof detail === 'string') {
         setError(detail);
       } else if (Array.isArray(detail)) {
-        setError(`Ошибка формата: ${detail[0].loc.join(' -> ')} (${detail[0].msg})`);
+        setError(`Ошибка: ${detail[0].loc?.join(' -> ')} (${detail[0].msg})`);
       } else {
         setError('Сервер отклонил запрос. Проверьте консоль.');
       }
