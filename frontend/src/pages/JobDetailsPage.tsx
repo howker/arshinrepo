@@ -11,28 +11,44 @@ export function JobDetailsPage() {
 
   useEffect(() => {
     if (!jobId) return;
+
+    let isMounted = true;
+    let timeoutId: NodeJS.Timeout;
+
     const fetchJob = async () => {
       try {
         const data = await jobsApi.getJobDetails(jobId);
-        setJob(data);
+        if (isMounted) {
+          setJob(data);
+          // Если задача все еще в работе, запрашиваем статус снова через 2 секунды
+          if (data.status === 'processing' || data.status === 'pending') {
+            timeoutId = setTimeout(fetchJob, 2000);
+          }
+        }
       } catch (err: any) {
-        setError(err.response?.data?.detail || 'Ошибка загрузки данных задачи');
+        if (isMounted) {
+          setError(err.response?.data?.detail || 'Ошибка загрузки данных задачи');
+        }
       } finally {
-        setIsLoading(false);
+        if (isMounted) setIsLoading(false);
       }
     };
+
     fetchJob();
+
+    // Очистка при уходе со страницы, чтобы не было утечек памяти
+    return () => {
+      isMounted = false;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, [jobId]);
 
   const handleDownload = async () => {
     if (!jobId) return;
     try {
-      // Запрашиваем файл как Blob (бинарные данные)
       const response = await apiClient.get(`/jobs/${jobId}/download`, {
         responseType: 'blob',
       });
-      
-      // Создаем скрытую ссылку для скачивания файла браузером
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
@@ -65,15 +81,15 @@ export function JobDetailsPage() {
               padding: '6px 12px', 
               borderRadius: '6px', 
               fontWeight: 500,
-              backgroundColor: job.status === 'completed' ? '#dcfce7' : job.status === 'processing' ? '#fef9c3' : '#f3f4f6',
-              color: job.status === 'completed' ? '#166534' : job.status === 'processing' ? '#854d0e' : '#1f2937'
+              backgroundColor: job.status === 'completed' ? '#dcfce7' : job.status === 'failed' ? '#fee2e2' : '#fef9c3',
+              color: job.status === 'completed' ? '#166534' : job.status === 'failed' ? '#991b1b' : '#854d0e'
             }}>
               {job.status.toUpperCase()}
             </span>
           </div>
           <div>
             <p className="muted" style={{ marginBottom: '8px' }}>Обработано приборов</p>
-            <strong style={{ fontSize: '18px' }}>{job.processed_items} / {job.total_items}</strong>
+            <strong style={{ fontSize: '18px' }}>{job.processed_items} / {job.total_items || '?'}</strong>
           </div>
           <div>
             <p className="muted" style={{ marginBottom: '8px' }}>Найдено расхождений</p>
@@ -88,8 +104,18 @@ export function JobDetailsPage() {
             Скачать размеченный Excel
           </button>
         )}
-        {job.status === 'processing' && (
-          <p className="muted">Файл сейчас обрабатывается воркером. Обновите страницу через минуту.</p>
+        {(job.status === 'processing' || job.status === 'pending') && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '16px', backgroundColor: '#f3f4f6', borderRadius: '8px' }}>
+            <div className="spinner" style={{ width: '20px', height: '20px', border: '3px solid #e5e7eb', borderTopColor: '#2563eb', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+            <p style={{ margin: 0, fontWeight: 500, color: '#374151' }}>Файл обрабатывается. Страница обновится автоматически...</p>
+          </div>
+        )}
+        {job.status === 'failed' && (
+          <div style={{ padding: '16px', backgroundColor: '#fee2e2', borderRadius: '8px', color: '#991b1b' }}>
+            <p style={{ margin: 0, fontWeight: 500 }}>Ошибка обработки:</p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '14px' }}>{job.error_message || 'Внутренняя ошибка парсера'}</p>
+          </div>
         )}
         
         <div style={{ marginTop: '32px' }}>
