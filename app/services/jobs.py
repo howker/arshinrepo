@@ -1,14 +1,17 @@
-import uuid
 import logging
-from fastapi import UploadFile, HTTPException
-from sqlalchemy.orm import Session
+import uuid
+
+from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
 from app.core.storage import storage
-from app.models.user import User
+from app.models.enums import FileObjectType, JobStatus
 from app.models.file_object import FileObject
 from app.models.job import Job
-from app.models.enums import FileObjectType, JobStatus
+from app.models.job_issue import JobIssue
+from app.models.user import User
 from app.workers.tasks import process_excel_job
 
 logger = logging.getLogger(__name__)
@@ -18,7 +21,7 @@ def process_job_upload(
     db: Session,
     user: User,
     file: UploadFile,
-    template_code: str
+    template_code: str,
 ) -> Job:
     if not file.filename or not file.filename.endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Only .xlsx files are allowed")
@@ -75,7 +78,73 @@ def process_job_upload(
 
 
 def get_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
-    job = db.get(Job, job_id)
-    if job is None or job.user_id != user.id:
+    stmt = (
+        select(Job)
+        .options(
+            selectinload(Job.source_file),
+            selectinload(Job.result_file),
+        )
+        .where(Job.id == job_id, Job.user_id == user.id)
+    )
+    job = db.execute(stmt).scalar_one_or_none()
+    if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+def get_job_issues_for_user(
+    db: Session,
+    user: User,
+    job_id: uuid.UUID,
+) -> list[JobIssue]:
+    get_job_for_user(db, user, job_id)
+
+    stmt = (
+        select(JobIssue)
+        .where(JobIssue.job_id == job_id)
+        .order_by(
+            JobIssue.row_number.asc().nullslast(),
+            JobIssue.created_at.asc(),
+        )
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def get_job_file_for_user(
+    db: Session,
+    user: User,
+    job_id: uuid.UUID,
+    object_type: FileObjectType,
+) -> FileObject:
+    job = get_job_for_user(db, user, job_id)
+
+    file_obj = job.source_file if object_type == FileObjectType.SOURCE else job.result_file
+    if file_obj is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return file_obj
+
+
+def download_job_file_for_user(
+    db: Session,
+    user: User,
+    job_id: uuid.UUID,
+    object_type: FileObjectType,
+) -> tuple[FileObject, bytes]:
+    file_obj = get_job_file_for_user(db, user, job_id, object_type)
+
+    try:
+        payload = storage.download_file(
+            bucket_name=file_obj.storage_bucket,
+            object_name=file_obj.storage_key,
+        )
+    except Exception as e:
+        logger.error(
+            "File download failed for job %s (%s): %s",
+            job_id,
+            object_type.value,
+            e,
+        )
+        raise HTTPException(status_code=500, detail="Storage download failed")
+
+    return file_obj, payload
