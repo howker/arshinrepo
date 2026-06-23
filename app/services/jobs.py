@@ -73,8 +73,16 @@ def process_job_upload(
     db.commit()
     db.refresh(job)
 
-    process_excel_job.delay(str(job.id))
     return job
+
+
+def list_jobs_for_user(db: Session, user: User) -> list[Job]:
+    stmt = (
+        select(Job)
+        .where(Job.user_id == user.id)
+        .order_by(Job.created_at.desc())
+    )
+    return list(db.execute(stmt).scalars().all())
 
 
 def get_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
@@ -89,6 +97,28 @@ def get_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
     job = db.execute(stmt).scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+def run_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
+    job = get_job_for_user(db, user, job_id)
+
+    if job.status in {JobStatus.QUEUED, JobStatus.PROCESSING}:
+        return job
+
+    if job.status not in {JobStatus.UPLOADED, JobStatus.FAILED}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job with status '{job.status.value}' cannot be re-queued",
+        )
+
+    job.status = JobStatus.QUEUED
+    job.error_message = None
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    process_excel_job.delay(str(job.id))
     return job
 
 
@@ -118,7 +148,9 @@ def get_job_file_for_user(
 ) -> FileObject:
     job = get_job_for_user(db, user, job_id)
 
-    file_obj = job.source_file if object_type == FileObjectType.SOURCE else job.result_file
+    file_obj = (
+        job.source_file if object_type == FileObjectType.SOURCE else job.result_file
+    )
     if file_obj is None:
         raise HTTPException(status_code=404, detail="File not found")
 

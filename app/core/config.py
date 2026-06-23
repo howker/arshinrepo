@@ -51,9 +51,11 @@ class Settings(BaseSettings):
     )
     arshin_timeout_connect: float = Field(default=5.0, alias="ARSHIN_TIMEOUT_CONNECT")
     arshin_timeout_read: float = Field(default=20.0, alias="ARSHIN_TIMEOUT_READ")
+    arshin_timeout_seconds: float = Field(default=20.0, alias="ARSHIN_TIMEOUT_SECONDS")
+    arshin_backoff_seconds: float = Field(default=2.0, alias="ARSHIN_BACKOFF_SECONDS")
     arshin_max_retries: int = Field(default=4, alias="ARSHIN_MAX_RETRIES")
 
-    default_template_code: str = Field(default="default", alias="DEFAULT_TEMPLATE_CODE")
+    default_template_code: str = Field(default="pril_1_main", alias="DEFAULT_TEMPLATE_CODE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
 

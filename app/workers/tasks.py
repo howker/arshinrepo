@@ -18,7 +18,7 @@ from app.models.enums import (
     JobStatus,
 )
 from app.excel.parser import TemplateDrivenParser
-from app.clients.arshin import arshin_client
+from app.clients.arshin import ArshinRateLimitError, ArshinUpstreamUnavailableError, arshin_client
 from app.services.comparator import compare_device_with_arshin
 from app.excel.annotator import ExcelAnnotator
 from app.utils.dates import parse_excel_date
@@ -195,8 +195,20 @@ def process_excel_job(job_id_str: str):
             job.finished_at = datetime.now(timezone.utc)
             db.commit()
             
+    except ArshinRateLimitError as e:
+        logger.warning("Job processing failed due to Arshin rate limit", extra={"job_id": job_id_str})
+        job.status = JobStatus.FAILED
+        job.error_message = f"ARSHIN_RATE_LIMIT: {e}"
+        job.finished_at = datetime.now(timezone.utc)
+        db.commit()
+    except ArshinUpstreamUnavailableError as e:
+        logger.warning("Job processing failed due to Arshin upstream unavailability", extra={"job_id": job_id_str})
+        job.status = JobStatus.FAILED
+        job.error_message = f"ARSHIN_UPSTREAM_UNAVAILABLE: {e}"
+        job.finished_at = datetime.now(timezone.utc)
+        db.commit()
     except Exception as e:
-        logger.exception("Job processing failed")
+        logger.exception("Job processing failed", extra={"job_id": job_id_str})
         job.status = JobStatus.FAILED
         job.error_message = str(e)
         job.finished_at = datetime.now(timezone.utc)
