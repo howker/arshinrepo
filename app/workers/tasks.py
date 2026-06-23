@@ -79,6 +79,8 @@ def process_excel_job(job_id_str: str):
             parser = TemplateDrivenParser(template_code=job.template_code)
             devices = parser.parse_workspace_file(input_path)
             
+            unique_rows = {dev.row_number for dev in devices}
+            job.total_rows = len(unique_rows)
             job.total_items = len(devices)
             db.commit()
 
