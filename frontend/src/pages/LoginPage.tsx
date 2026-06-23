@@ -60,7 +60,7 @@ export function LoginPage() {
             <span className="field-label">Email</span>
             <input 
               type="email" 
-              placeholder="admin@arshin.local" 
+              placeholder="admin@arshin.ru" 
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               disabled={isLoading}
