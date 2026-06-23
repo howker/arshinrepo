@@ -9,8 +9,10 @@ class JobResponse(BaseModel):
     original_filename: str
     template_code: str
     total_rows: int
+    total_items: int
     processed_items: int
     issue_count: int
+    created_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error_message: str | None = None
