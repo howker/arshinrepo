@@ -15,26 +15,47 @@ class JobStatus(StrEnum):
     COMPLETED = "completed"
     COMPLETED_WITH_ISSUES = "completed_with_issues"
     FAILED = "failed"
+    FAILED_SOURCE_UNAVAILABLE = "failed_source_unavailable"
 
 
 class FileObjectType(StrEnum):
     SOURCE = "source"
     RESULT = "result"
+    REPORT = "report"
 
 
 class JobItemStatus(StrEnum):
     PENDING = "pending"
     MATCHED = "matched"
     MISMATCH = "mismatch"
-    NOT_FOUND = "not_found"
-    MULTIPLE_MATCHES = "multiple_matches"
+    AMBIGUOUS = "ambiguous"
+    SOURCE_UNCERTAIN = "source_uncertain"
+    PLACEHOLDER = "placeholder"
+    MISSING_DATA = "missing_data"
     ERROR = "error"
 
 
 class JobIssueSeverity(StrEnum):
+    """Severity -> цвет заливки в Excel (ТЗ раздел 12)."""
+    RED = "red"
+    YELLOW = "yellow"
+    ORANGE = "orange"
     INFO = "info"
-    WARNING = "warning"
-    ERROR = "error"
+
+
+class IssueCode(StrEnum):
+    MATCH = "MATCH"
+    TYPE_MISMATCH = "TYPE_MISMATCH"
+    SERIAL_MISMATCH = "SERIAL_MISMATCH"
+    VERIFICATION_DATE_MISMATCH = "VERIFICATION_DATE_MISMATCH"
+    NEXT_VERIFICATION_DATE_MISMATCH = "NEXT_VERIFICATION_DATE_MISMATCH"
+    LINK_MISMATCH = "LINK_MISMATCH"
+    LINK_FILLED = "LINK_FILLED"
+    PLACEHOLDER_VALUE_DETECTED = "PLACEHOLDER_VALUE_DETECTED"
+    MISSING_REQUIRED_FIELD = "MISSING_REQUIRED_FIELD"
+    ARSHIN_NOT_FOUND = "ARSHIN_NOT_FOUND"
+    SOURCE_UNCERTAIN = "SOURCE_UNCERTAIN"
+    MULTIPLE_MATCHES = "MULTIPLE_MATCHES"
 
 
 class DeviceType(StrEnum):
@@ -50,6 +71,14 @@ class CheckStatus(StrEnum):
     NOT_FOUND = "not_found"
     MULTIPLE_MATCHES = "multiple_matches"
     FAILED = "failed"
+
+
+class CheckResultClass(StrEnum):
+    """Классификация результата попытки запроса к Аршину (ТЗ раздел 9.3)."""
+    SUCCESS_WITH_MATCH = "success_with_match"
+    SUCCESS_EMPTY = "success_empty"
+    TEMPORARY_SOURCE_FAILURE = "temporary_source_failure"
+    AMBIGUOUS_MULTIPLE_MATCHES = "ambiguous_multiple_matches"
 
 
 class AuditAction(StrEnum):

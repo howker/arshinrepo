@@ -1,8 +1,8 @@
-import io
-import logging
+from __future__ import annotations
 
-from minio import Minio
-from minio.error import S3Error
+import logging
+import os
+from pathlib import Path
 
 from app.core.config import get_settings
 
@@ -10,51 +10,67 @@ logger = logging.getLogger(__name__)
 
 
 class StorageClient:
-    @property
-    def client(self) -> Minio:
-        if not hasattr(self, "_client"):
-            settings = get_settings()
-            self._client = Minio(
-                settings.minio_endpoint,
-                access_key=settings.minio_access_key,
-                secret_key=settings.minio_secret_key,
-                secure=settings.minio_secure,
-            )
-        return self._client
+    """Локальное файловое хранилище (ТЗ §5)."""
 
-    def ensure_bucket_exists(self, bucket_name: str) -> None:
-        try:
-            if not self.client.bucket_exists(bucket_name):
-                self.client.make_bucket(bucket_name)
-                logger.info(f"Created MinIO bucket: {bucket_name}")
-        except S3Error as e:
-            logger.error(f"MinIO Ensure Bucket Error: {e}")
-            raise
+    def __init__(self) -> None:
+        settings = get_settings()
+        self.storage_root = settings.storage_root
+        self.uploads_dir = settings.uploads_dir
+        self.results_dir = settings.results_dir
+
+        # Создаём директории при инициализации
+        self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        self.results_dir.mkdir(parents=True, exist_ok=True)
 
     def upload_file(
         self,
-        bucket_name: str,
-        object_name: str,
+        relative_path: str,
         data: bytes,
         content_type: str = "application/octet-stream",
     ) -> str:
-        self.ensure_bucket_exists(bucket_name)
-        self.client.put_object(
-            bucket_name=bucket_name,
-            object_name=object_name,
-            data=io.BytesIO(data),
-            length=len(data),
-            content_type=content_type,
-        )
-        return object_name
+        """Сохранить файл в локальное хранилище.
+        
+        Args:
+            relative_path: путь относительно storage_root (напр. "uploads/job_id/file.xlsx")
+            data: содержимое файла
+            content_type: MIME-тип (игнорируется для локального диска)
+        
+        Returns:
+            Абсолютный путь к сохранённому файлу
+        """
+        full_path = self.storage_root / relative_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(full_path, "wb") as f:
+            f.write(data)
+        
+        logger.info(f"Saved file to {full_path} ({len(data)} bytes)")
+        return str(full_path)
 
-    def download_file(self, bucket_name: str, object_name: str) -> bytes:
-        response = self.client.get_object(bucket_name, object_name)
-        try:
-            return response.read()
-        finally:
-            response.close()
-            response.release_conn()
+    def download_file(self, relative_path: str) -> bytes:
+        """Прочитать файл из локального хранилища.
+        
+        Args:
+            relative_path: путь относительно storage_root
+        
+        Returns:
+            Содержимое файла
+        """
+        full_path = self.storage_root / relative_path
+        
+        if not full_path.exists():
+            raise FileNotFoundError(f"File not found: {full_path}")
+        
+        with open(full_path, "rb") as f:
+            return f.read()
+
+    def delete_file(self, relative_path: str) -> None:
+        """Удалить файл из локального хранилища."""
+        full_path = self.storage_root / relative_path
+        
+        if full_path.exists():
+            full_path.unlink()
+            logger.info(f"Deleted file {full_path}")
 
 
 storage = StorageClient()

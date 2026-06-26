@@ -1,10 +1,8 @@
-
 services:
   nginx:
     image: nginx:1.27-alpine
     depends_on:
       - app
-      - minio
     ports:
       - "80:80"
     volumes:
@@ -25,10 +23,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      minio:
-        condition: service_started
     volumes:
       - ./:/app
+      - ./storage:/app/storage
     restart: unless-stopped
     networks:
       - backend
@@ -37,27 +34,7 @@ services:
     build:
       context: .
       dockerfile: docker/app/Dockerfile
-    command: ["/app/docker/app/entrypoint.sh", "celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
-    env_file:
-      - .env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-      minio:
-        condition: service_started
-    volumes:
-      - ./:/app
-    restart: unless-stopped
-    networks:
-      - backend
-
-  beat:
-    build:
-      context: .
-      dockerfile: docker/app/Dockerfile
-    command: ["/app/docker/app/entrypoint.sh", "celery", "-A", "app.workers.celery_app:celery_app", "beat", "--loglevel=INFO"]
+    command: ["/app/docker/app/entrypoint.sh", "celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=1"]
     env_file:
       - .env
     depends_on:
@@ -67,6 +44,7 @@ services:
         condition: service_started
     volumes:
       - ./:/app
+      - ./storage:/app/storage
     restart: unless-stopped
     networks:
       - backend
@@ -74,13 +52,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: arshin_mvp
-      POSTGRES_USER: arshin
-      POSTGRES_PASSWORD: arshin
+      POSTGRES_DB: ${POSTGRES_DB:-arshin}
+      POSTGRES_USER: ${POSTGRES_USER:-arshin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arshin}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U arshin -d arshin_mvp"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-arshin} -d ${POSTGRES_DB:-arshin}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -95,23 +73,8 @@ services:
     networks:
       - backend
 
-  minio:
-    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: miniosecret
-    ports:
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-    restart: unless-stopped
-    networks:
-      - backend
-
 volumes:
   postgres_data:
-  minio_data:
 
 networks:
   backend:

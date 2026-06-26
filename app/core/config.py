@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,51 +15,69 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "Arshin Excel Checker"
+    # --- App ---
+    app_name: str = Field(default="Arshin Excel Checker", alias="APP_NAME")
     app_env: str = Field(default="dev", alias="APP_ENV")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
     app_port: int = Field(default=8000, alias="APP_PORT")
-    app_debug: bool = Field(default=True, alias="APP_DEBUG")
+    app_debug: bool = Field(default=False, alias="APP_DEBUG")
     api_prefix: str = Field(default="/api", alias="API_PREFIX")
 
-    secret_key: str = Field(default="change-me", alias="SECRET_KEY")
-    access_token_expire_minutes: int = Field(default=60, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    secret_key: str = Field(default="change-me", alias="APP_SECRET_KEY")
+    access_token_expire_minutes: int = Field(default=60 * 24, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
     algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
 
+    # --- Postgres ---
     postgres_host: str = Field(default="postgres", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
     postgres_db: str = Field(default="arshin", alias="POSTGRES_DB")
     postgres_user: str = Field(default="arshin", alias="POSTGRES_USER")
     postgres_password: str = Field(default="arshin", alias="POSTGRES_PASSWORD")
 
+    # --- Redis ---
     redis_host: str = Field(default="redis", alias="REDIS_HOST")
     redis_port: int = Field(default=6379, alias="REDIS_PORT")
     redis_db: int = Field(default=0, alias="REDIS_DB")
 
-    minio_endpoint: str = Field(default="minio:9000", alias="MINIO_ENDPOINT")
-    minio_access_key: str = Field(default="minioadmin", alias="MINIO_ACCESS_KEY")
-    minio_secret_key: str = Field(default="minioadmin", alias="MINIO_SECRET_KEY")
-    minio_bucket_source: str = Field(default="source-files", alias="MINIO_BUCKET_SOURCE")
-    minio_bucket_result: str = Field(default="result-files", alias="MINIO_BUCKET_RESULT")
-    minio_secure: bool = Field(default=False, alias="MINIO_SECURE")
+    # --- Storage (локальный диск, НЕ MinIO — ТЗ §2.3, §5) ---
+    storage_root: Path = Field(default=Path("/app/storage"), alias="STORAGE_ROOT")
+    max_upload_mb: int = Field(default=25, alias="MAX_UPLOAD_MB")
 
+    # --- Arshin API (ТЗ §1, §9, §17) ---
+    arshin_api_mode: str = Field(default="xcdb", alias="ARSHIN_API_MODE")
+    arshin_xcdb_url: str = Field(
+        default="https://fgis.gost.ru/fundmetrology/cm/xcdb/vri/select",
+        alias="ARSHIN_XCDB_URL",
+    )
+    arshin_eapi_url: str = Field(
+        default="https://fgis.gost.ru/fundmetrology/eapi/vri",
+        alias="ARSHIN_EAPI_URL",
+    )
+    arshin_card_url: str = Field(
+        default="https://fgis.gost.ru/fundmetrology/cm/results",
+        alias="ARSHIN_CARD_URL",
+    )
+    arshin_rows: int = Field(default=100, alias="ARSHIN_ROWS")
+    arshin_request_delay_ms: int = Field(default=1000, alias="ARSHIN_REQUEST_DELAY_MS")
+    arshin_timeout_connect: float = Field(default=5.0, alias="ARSHIN_TIMEOUT_CONNECT")
+    arshin_timeout_read: float = Field(default=20.0, alias="ARSHIN_TIMEOUT_READ")
+    arshin_max_retries: int = Field(default=4, alias="ARSHIN_MAX_RETRIES")
+    arshin_backoff_seconds: float = Field(default=2.0, alias="ARSHIN_BACKOFF_SECONDS")
+    arshin_year_sweep: bool = Field(default=False, alias="ARSHIN_YEAR_SWEEP")
+
+    # --- Celery ---
     celery_broker_url: str | None = Field(default=None, alias="CELERY_BROKER_URL")
     celery_result_backend: str | None = Field(default=None, alias="CELERY_RESULT_BACKEND")
 
-    arshin_base_url: str = Field(
-        default="https://fgis.gost.ru/fundmetrology/eapi/vri",
-        alias="ARSHIN_BASE_URL",
-    )
-    arshin_timeout_connect: float = Field(default=5.0, alias="ARSHIN_TIMEOUT_CONNECT")
-    arshin_timeout_read: float = Field(default=20.0, alias="ARSHIN_TIMEOUT_READ")
-    arshin_timeout_seconds: float = Field(default=20.0, alias="ARSHIN_TIMEOUT_SECONDS")
-    arshin_backoff_seconds: float = Field(default=2.0, alias="ARSHIN_BACKOFF_SECONDS")
-    arshin_max_retries: int = Field(default=4, alias="ARSHIN_MAX_RETRIES")
-
+    # --- Templates / Seed ---
     default_template_code: str = Field(default="pril_1_main", alias="DEFAULT_TEMPLATE_CODE")
+    seed_admin_email: str = Field(default="", alias="SEED_ADMIN_EMAIL")
+    seed_admin_password: str = Field(default="", alias="SEED_ADMIN_PASSWORD")
+
+    # --- Logging ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-
+    # --- Derived URLs ---
     @property
     def database_url(self) -> str:
         return (
@@ -81,6 +100,14 @@ class Settings(BaseSettings):
     @property
     def result_backend(self) -> str:
         return self.celery_result_backend or self.redis_url
+
+    @property
+    def uploads_dir(self) -> Path:
+        return self.storage_root / "uploads"
+
+    @property
+    def results_dir(self) -> Path:
+        return self.storage_root / "results"
 
 
 @lru_cache
