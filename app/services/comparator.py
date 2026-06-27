@@ -1,67 +1,167 @@
-from typing import List
+"""Сравнение данных файла с выбранной записью Аршина (ТЗ раздел 11)."""
+from __future__ import annotations
+
+import logging
 from datetime import date
-from app.schemas.devices import ExtractedDeviceDTO
-from app.schemas.arshin import ArshinRecordDTO
-from app.schemas.comparison import ComparisonResult, ComparisonIssue
-from app.models.enums import JobItemStatus
-from app.utils.dates import parse_excel_date
+from typing import Any
 
-def compare_device_with_arshin(
-    device: ExtractedDeviceDTO, 
-    arshin_records: List[ArshinRecordDTO]
+from app.models.enums import IssueCode, JobIssueSeverity, JobItemStatus
+from app.excel.normalize import to_canonical_date, extract_vri_from_link
+
+logger = logging.getLogger(__name__)
+
+
+class Issue:
+    def __init__(self, code: IssueCode, severity: JobIssueSeverity, message: str, cell_ref: str | None = None):
+        self.code = code
+        self.severity = severity
+        self.message = message
+        self.cell_ref = cell_ref
+
+
+class ComparisonResult:
+    def __init__(self, status: JobItemStatus, issues: list[Issue], selected_url: str | None = None):
+        self.status = status
+        self.issues = issues
+        self.selected_url = selected_url
+
+
+def compare_device(
+    device: dict,
+    match_result,
 ) -> ComparisonResult:
-    
-    if not arshin_records:
-        return ComparisonResult(
-            device=device,
-            status=JobItemStatus.NOT_FOUND,
-            issues=[ComparisonIssue(code="ARSHIN_NOT_FOUND", message="Поверки для данного прибора не найдены")]
-        )
-
-    # Стратегия выбора: берем самую свежую поверку (сортировка по убыванию даты)
-    records_sorted = sorted(
-        arshin_records, 
-        key=lambda x: x.verification_date or date.min, 
-        reverse=True
-    )
-    best_match = records_sorted[0]
-
+    """Сравнение прибора с выбранной записью Аршина (ТЗ 11)."""
     issues = []
+    selected = match_result.selected
     status = JobItemStatus.MATCHED
 
-    # Проверка на дубли (информационный warning)
-    if len(arshin_records) > 1:
-        issues.append(ComparisonIssue(
-            code="MULTIPLE_MATCHES", 
-            message=f"Найдено {len(arshin_records)} записей, выбрана последняя от {best_match.verification_date}",
-            severity="warning"
+    # Если нет выбранной записи
+    if not selected:
+        if match_result.result_class == CheckResultClass.SUCCESS_EMPTY:
+            status = JobItemStatus.SOURCE_UNCERTAIN
+            issues.append(Issue(
+                code=IssueCode.ARSHIN_NOT_FOUND,
+                severity=JobIssueSeverity.YELLOW,
+                message="Не удалось найти запись в Аршине после ретраев. Возможно, прибор отсутствует в реестре.",
+                cell_ref=device.get('cell_refs', {}).get('serial'),
+            ))
+        elif match_result.result_class == CheckResultClass.AMBIGUOUS_MULTIPLE_MATCHES:
+            status = JobItemStatus.AMBIGUOUS
+            issues.append(Issue(
+                code=IssueCode.MULTIPLE_MATCHES,
+                severity=JobIssueSeverity.ORANGE,
+                message=f"Неоднозначный выбор: {match_result.decision_reason}",
+                cell_ref=device.get('cell_refs', {}).get('serial'),
+            ))
+        else:
+            status = JobItemStatus.SOURCE_UNCERTAIN
+            issues.append(Issue(
+                code=IssueCode.SOURCE_UNCERTAIN,
+                severity=JobIssueSeverity.YELLOW,
+                message="Аршин вернул пустой ответ (транзиентная ошибка). Проверьте позже.",
+                cell_ref=device.get('cell_refs', {}).get('serial'),
+            ))
+        return ComparisonResult(status, issues)
+
+    # Сравнение полей
+    file_type = device.get('type_norm')
+    arshin_type = normalize_type_for_score(selected.get('mi_type', ''))
+    if file_type and arshin_type:
+        if normalize_type_for_score(file_type) != arshin_type:
+            status = JobItemStatus.MISMATCH
+            issues.append(Issue(
+                code=IssueCode.TYPE_MISMATCH,
+                severity=JobIssueSeverity.RED,
+                message=f"Несовпадение типа: в файле {file_type}, в Аршине {arshin_type}",
+                cell_ref=device.get('cell_refs', {}).get('type'),
+            ))
+
+    file_serial = device.get('serial_norm')
+    arshin_serial = normalize_serial_for_gate(selected.get('mi_number', ''))
+    if file_serial and arshin_serial:
+        if file_serial != arshin_serial:
+            status = JobItemStatus.MISMATCH
+            issues.append(Issue(
+                code=IssueCode.SERIAL_MISMATCH,
+                severity=JobIssueSeverity.RED,
+                message=f"Несовпадение серийного номера: в файле {file_serial}, в Аршине {arshin_serial}",
+                cell_ref=device.get('cell_refs', {}).get('serial'),
+            ))
+
+    # Даты
+    file_vd = device.get('verification_date_norm')
+    arshin_vd = selected.get('verification_date')
+    if file_vd and arshin_vd:
+        if isinstance(file_vd, date) and isinstance(arshin_vd, date):
+            if file_vd != arshin_vd:
+                status = JobItemStatus.MISMATCH
+                issues.append(Issue(
+                    code=IssueCode.VERIFICATION_DATE_MISMATCH,
+                    severity=JobIssueSeverity.RED,
+                    message=f"Несовпадение даты поверки: в файле {file_vd}, в Аршине {arshin_vd}",
+                    cell_ref=device.get('cell_refs', {}).get('verification_date'),
+                ))
+    elif file_vd == "INVALID":
+        status = JobItemStatus.MISMATCH
+        issues.append(Issue(
+            code=IssueCode.PLACEHOLDER_VALUE_DETECTED,
+            severity=JobIssueSeverity.RED,
+            message="Некорректное значение даты в файле (заглушка: 31.12.1899 или 0)",
+            cell_ref=device.get('cell_refs', {}).get('verification_date'),
         ))
 
-    # Сверка: Дата поверки
-    ex_v_date = parse_excel_date(device.verification_date_raw)
-    if ex_v_date and best_match.verification_date:
-        if ex_v_date != best_match.verification_date:
-            issues.append(ComparisonIssue(
-                code="VERIFICATION_DATE_MISMATCH", 
-                message=f"Дата поверки: в файле {ex_v_date.strftime('%d.%m.%Y')}, в Аршине {best_match.verification_date.strftime('%d.%m.%Y')}"
-            ))
-
-    # Сверка: Действителен до
-    ex_nv_date = parse_excel_date(device.next_verification_date_raw)
-    if ex_nv_date and best_match.valid_date:
-        if ex_nv_date != best_match.valid_date:
-            issues.append(ComparisonIssue(
-                code="NEXT_VERIFICATION_DATE_MISMATCH", 
-                message=f"Срок действия: в файле {ex_nv_date.strftime('%d.%m.%Y')}, в Аршине {best_match.valid_date.strftime('%d.%m.%Y')}"
-            ))
-
-    # Определение итогового статуса
-    if any(i.severity == "error" for i in issues):
+    file_nd = device.get('next_date_norm')
+    arshin_valid = selected.get('valid_date')
+    if file_nd and arshin_valid:
+        if isinstance(file_nd, date) and isinstance(arshin_valid, date):
+            if file_nd != arshin_valid:
+                status = JobItemStatus.MISMATCH
+                issues.append(Issue(
+                    code=IssueCode.NEXT_VERIFICATION_DATE_MISMATCH,
+                    severity=JobIssueSeverity.RED,
+                    message=f"Несовпадение даты след. поверки: в файле {file_nd}, в Аршине {arshin_valid}",
+                    cell_ref=device.get('cell_refs', {}).get('next_date'),
+                ))
+    elif file_nd == "INVALID":
         status = JobItemStatus.MISMATCH
+        issues.append(Issue(
+            code=IssueCode.PLACEHOLDER_VALUE_DETECTED,
+            severity=JobIssueSeverity.RED,
+            message="Некорректное значение даты след. поверки в файле (заглушка)",
+            cell_ref=device.get('cell_refs', {}).get('next_date'),
+        ))
 
-    return ComparisonResult(
-        device=device,
-        status=status,
-        matched_record=best_match,
-        issues=issues
-    )
+    # Ссылка
+    selected_url = selected.get('card_url')
+    file_link_vri = device.get('link_vri')
+    if file_link_vri and selected_url:
+        # Сравниваем по VRI (числовая часть после '-')
+        file_vri_num = extract_vri_from_link(file_link_vri)
+        arshin_vri_num = extract_vri_from_link(selected_url)
+        if file_vri_num and arshin_vri_num and file_vri_num != arshin_vri_num:
+            status = JobItemStatus.MISMATCH
+            issues.append(Issue(
+                code=IssueCode.LINK_MISMATCH,
+                severity=JobIssueSeverity.RED,
+                message=f"Несовпадение ссылки на карточку СИ: в файле {file_link_vri}, в Аршине {selected_url}",
+                cell_ref=device.get('cell_refs', {}).get('link'),
+            ))
+    elif not file_link_vri and selected_url:
+        # Ссылки не было — впишем (info)
+        issues.append(Issue(
+            code=IssueCode.LINK_FILLED,
+            severity=JobIssueSeverity.INFO,
+            message=f"Ссылка обновлена: {selected_url}",
+            cell_ref=device.get('cell_refs', {}).get('link'),
+        ))
+
+    # Если нет ни одной ошибки — MATCH
+    if not issues and status == JobItemStatus.MATCHED:
+        issues.append(Issue(
+            code=IssueCode.MATCH,
+            severity=JobIssueSeverity.INFO,
+            message="Все данные совпадают",
+            cell_ref=None,
+        ))
+
+    return ComparisonResult(status, issues, selected_url)
