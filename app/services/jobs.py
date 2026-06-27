@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import logging
 import uuid
+from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.storage import storage
@@ -17,45 +20,51 @@ from app.workers.tasks import process_excel_job
 logger = logging.getLogger(__name__)
 
 
+def _source_relative_path(job_id: uuid.UUID, filename: str) -> str:
+    """Путь к исходнику относительно storage_root (ТЗ §5)."""
+    return f"uploads/{job_id}/source/{filename}"
+
+
+def _result_relative_path(job_id: uuid.UUID, filename: str) -> str:
+    """Путь к результату относительно storage_root (ТЗ §5)."""
+    return f"results/{job_id}/{filename}"
+
+
 def process_job_upload(
     db: Session,
     user: User,
     file: UploadFile,
     template_code: str,
 ) -> Job:
-    if not file.filename or not file.filename.endswith(".xlsx"):
+    """Загрузка .xlsx файла и создание Job в статусе UPLOADED (ТЗ §13)."""
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Only .xlsx files are allowed")
 
     settings = get_settings()
     file_data = file.file.read()
     file_size = len(file_data)
-    file_type = (
-        file.content_type
-        or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    if file_size > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max {settings.max_upload_mb} MB",
+        )
 
     job_uuid = uuid.uuid4()
-    storage_key = f"{user.id}/{job_uuid}/{file.filename}"
+    relative_path = _source_relative_path(job_uuid, file.filename)
 
     try:
-        storage.upload_file(
-            bucket_name=settings.minio_bucket_source,
-            object_name=storage_key,
-            data=file_data,
-            content_type=file_type,
-        )
+        storage.upload_file(relative_path=relative_path, data=file_data)
     except Exception as e:
-        logger.error(f"Job {job_uuid} file upload failed: {e}")
+        logger.error("Job %s file upload failed: %s", job_uuid, e)
         raise HTTPException(status_code=500, detail="Storage upload failed")
 
     file_obj = FileObject(
-        user_id=user.id,
-        object_type=FileObjectType.SOURCE,
-        original_filename=file.filename,
-        storage_bucket=settings.minio_bucket_source,
-        storage_key=storage_key,
+        job_id=job_uuid,
+        kind=FileObjectType.SOURCE,
+        path=relative_path,
         size_bytes=file_size,
-        content_type=file_type,
     )
     db.add(file_obj)
     db.flush()
@@ -63,12 +72,10 @@ def process_job_upload(
     job = Job(
         id=job_uuid,
         user_id=user.id,
-        source_file_id=file_obj.id,
         status=JobStatus.UPLOADED,
-        template_code=template_code,
-        original_filename=file.filename,
+        source_filename=file.filename,
+        source_file_path=relative_path,
     )
-
     db.add(job)
     db.commit()
     db.refresh(job)
@@ -88,10 +95,6 @@ def list_jobs_for_user(db: Session, user: User) -> list[Job]:
 def get_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
     stmt = (
         select(Job)
-        .options(
-            selectinload(Job.source_file),
-            selectinload(Job.result_file),
-        )
         .where(Job.id == job_id, Job.user_id == user.id)
     )
     job = db.execute(stmt).scalar_one_or_none()
@@ -101,12 +104,13 @@ def get_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
 
 
 def run_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
+    """Постановка задачи в очередь (ТЗ §13)."""
     job = get_job_for_user(db, user, job_id)
 
     if job.status in {JobStatus.QUEUED, JobStatus.PROCESSING}:
         return job
 
-    if job.status not in {JobStatus.UPLOADED, JobStatus.FAILED}:
+    if job.status not in {JobStatus.UPLOADED, JobStatus.FAILED, JobStatus.FAILED_SOURCE_UNAVAILABLE}:
         raise HTTPException(
             status_code=409,
             detail=f"Job with status '{job.status.value}' cannot be re-queued",
@@ -133,7 +137,7 @@ def get_job_issues_for_user(
         select(JobIssue)
         .where(JobIssue.job_id == job_id)
         .order_by(
-            JobIssue.row_number.asc().nullslast(),
+            JobIssue.cell.asc().nullslast(),
             JobIssue.created_at.asc(),
         )
     )
@@ -144,16 +148,18 @@ def get_job_file_for_user(
     db: Session,
     user: User,
     job_id: uuid.UUID,
-    object_type: FileObjectType,
+    kind: FileObjectType,
 ) -> FileObject:
-    job = get_job_for_user(db, user, job_id)
+    """Найти FileObject по job_id + kind (ТЗ §4.3)."""
+    get_job_for_user(db, user, job_id)
 
-    file_obj = (
-        job.source_file if object_type == FileObjectType.SOURCE else job.result_file
+    stmt = select(FileObject).where(
+        FileObject.job_id == job_id,
+        FileObject.kind == kind,
     )
+    file_obj = db.execute(stmt).scalar_one_or_none()
     if file_obj is None:
         raise HTTPException(status_code=404, detail="File not found")
-
     return file_obj
 
 
@@ -161,22 +167,18 @@ def download_job_file_for_user(
     db: Session,
     user: User,
     job_id: uuid.UUID,
-    object_type: FileObjectType,
+    kind: FileObjectType,
 ) -> tuple[FileObject, bytes]:
-    file_obj = get_job_file_for_user(db, user, job_id, object_type)
+    """Скачать файл из локального хранилища (ТЗ §5, §13)."""
+    file_obj = get_job_file_for_user(db, user, job_id, kind)
 
     try:
-        payload = storage.download_file(
-            bucket_name=file_obj.storage_bucket,
-            object_name=file_obj.storage_key,
-        )
+        payload = storage.download_file(file_obj.path)
+    except FileNotFoundError:
+        logger.error("File not found on disk: %s", file_obj.path)
+        raise HTTPException(status_code=404, detail="File not found on storage")
     except Exception as e:
-        logger.error(
-            "File download failed for job %s (%s): %s",
-            job_id,
-            object_type.value,
-            e,
-        )
+        logger.error("File download failed for job %s (%s): %s", job_id, kind.value, e)
         raise HTTPException(status_code=500, detail="Storage download failed")
 
     return file_obj, payload

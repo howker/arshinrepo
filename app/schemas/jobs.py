@@ -1,51 +1,57 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
-from app.models.enums import FileObjectType, JobIssueSeverity, JobStatus
+from app.models.enums import FileObjectType, IssueCode, JobIssueSeverity, JobStatus
 
 
 class JobResponse(BaseModel):
+    """DTO для Job (ТЗ §4.2)."""
     id: UUID
     status: JobStatus
-    original_filename: str
-    template_code: str
-    total_rows: int
+    source_filename: str
     total_items: int
-    processed_items: int
-    issue_count: int
+    matched_count: int
+    mismatch_count: int
+    ambiguous_count: int
+    source_uncertain_count: int
+    placeholder_count: int
     created_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error_message: str | None = None
 
+    @computed_field
+    @property
+    def result_available(self) -> bool:
+        """Флаг доступности результата для скачивания (ТЗ §13)."""
+        return self.status in {JobStatus.COMPLETED, JobStatus.COMPLETED_WITH_ISSUES}
+
     model_config = ConfigDict(from_attributes=True)
 
 
 class JobIssueResponse(BaseModel):
+    """DTO для JobIssue (ТЗ §4.6)."""
     id: UUID
     job_id: UUID
     job_item_id: UUID | None = None
-    code: str
-    severity: JobIssueSeverity
     sheet_name: str | None = None
-    row_number: int | None = None
-    cell_ref: str | None = None
+    cell: str | None = None
+    severity: JobIssueSeverity
+    code: IssueCode
     message: str
-    details: dict | None = None
     created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class FileObjectResponse(BaseModel):
+    """DTO для FileObject (ТЗ §4.3)."""
     id: UUID
-    object_type: FileObjectType
-    original_filename: str
-    storage_bucket: str
-    storage_key: str
-    content_type: str | None = None
+    job_id: UUID
+    kind: FileObjectType
+    path: str
     size_bytes: int
     created_at: datetime | None = None
 
@@ -53,6 +59,7 @@ class FileObjectResponse(BaseModel):
 
 
 class RunJobResponse(BaseModel):
+    """Ответ на POST /api/jobs/{id}/run."""
     job_id: UUID
     status: JobStatus
 

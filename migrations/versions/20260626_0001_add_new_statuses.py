@@ -32,7 +32,7 @@ def upgrade() -> None:
     op.execute("ALTER TABLE job_issues ALTER COLUMN severity TYPE TEXT USING severity::text")
     # Удаляем старый тип
     op.execute("DROP TYPE IF EXISTS job_issue_severity_enum")
-    # Создаём новый тип с значениями в верхнем регистре (как принято в SQLAlchemy Enum)
+    # Создаём новый тип с значениями в верхнем регистре
     op.execute("CREATE TYPE job_issue_severity_enum AS ENUM ('RED', 'YELLOW', 'ORANGE', 'INFO')")
     # Маппим старые значения в новые
     op.execute("""
@@ -47,16 +47,32 @@ def upgrade() -> None:
 
     # 3. Создаём check_result_class_enum и добавляем колонку result_class
     op.execute("CREATE TYPE check_result_class_enum AS ENUM ('SUCCESS_WITH_MATCH', 'SUCCESS_EMPTY', 'TEMPORARY_SOURCE_FAILURE', 'AMBIGUOUS_MULTIPLE_MATCHES')")
-    op.add_column(
-        'job_item_checks',
-        sa.Column('result_class', postgresql.ENUM(name='check_result_class_enum', create_type=False), nullable=True)
-    )
+    
+    # Проверяем, существует ли таблица job_item_checks
+    result = op.execute("SELECT to_regclass('public.job_item_checks')")
+    if result.first()[0] is not None:
+        op.add_column(
+            'job_item_checks',
+            sa.Column('result_class', postgresql.ENUM(name='check_result_class_enum', create_type=False), nullable=True)
+        )
 
 
 def downgrade() -> None:
-    op.drop_column('job_item_checks', 'result_class')
+    # Безопасно удаляем колонку, если таблица существует и колонка есть
+    result = op.execute("SELECT to_regclass('public.job_item_checks')")
+    if result.first()[0] is not None:
+        # Проверяем, существует ли колонка result_class
+        col_result = op.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='job_item_checks' AND column_name='result_class'
+        """)
+        if col_result.first():
+            op.drop_column('job_item_checks', 'result_class')
+    
     op.execute("DROP TYPE IF EXISTS check_result_class_enum")
 
+    # Возвращаем старый enum для severity
     op.execute("ALTER TABLE job_issues ALTER COLUMN severity TYPE TEXT USING severity::text")
     op.execute("DROP TYPE IF EXISTS job_issue_severity_enum")
     op.execute("CREATE TYPE job_issue_severity_enum AS ENUM ('INFO', 'WARNING', 'ERROR')")

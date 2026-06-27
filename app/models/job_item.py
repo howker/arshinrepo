@@ -4,11 +4,11 @@ import uuid
 from datetime import date
 
 from sqlalchemy import Date, Enum, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
-from app.models.enums import DeviceType, JobItemStatus
+from app.models.enums import JobItemStatus
 
 
 class JobItem(BaseModel):
@@ -22,29 +22,35 @@ class JobItem(BaseModel):
     )
 
     sheet_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    row_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    row_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    excel_row: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    device_group: Mapped[str] = mapped_column(String(100), nullable=False)
-    device_type: Mapped[DeviceType] = mapped_column(
-        Enum(DeviceType, name="device_type_enum"),
-        nullable=False,
-    )
+    device_kind: Mapped[str] = mapped_column(String(10), nullable=False)  # si|ct|vt
+    block_code: Mapped[str] = mapped_column(String(50), nullable=False)
 
     type_raw: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    type_normalized: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    type_norm: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     serial_raw: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    serial_normalized: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    serial_norm: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    verification_date_file: Mapped[date | None] = mapped_column(Date, nullable=True)
-    next_verification_date_file: Mapped[date | None] = mapped_column(Date, nullable=True)
-    arshin_url_file: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    accuracy_class_raw: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
-    excel_cell_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    excel_cell_serial: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    excel_cell_verification_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    excel_cell_next_verification_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    excel_cell_link: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    verification_date_file_raw: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    verification_date_file_norm: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    next_date_file_raw: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    next_date_file_norm: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    link_file_raw: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    link_file_vri: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    cell_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cell_serial: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cell_verification_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cell_next_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cell_link: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    context_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     status: Mapped[JobItemStatus] = mapped_column(
         Enum(JobItemStatus, name="job_item_status_enum"),
@@ -52,7 +58,6 @@ class JobItem(BaseModel):
         nullable=False,
         index=True,
     )
-    comment_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     job = relationship("Job", back_populates="items")
     checks = relationship("JobItemCheck", back_populates="job_item", cascade="all, delete-orphan")

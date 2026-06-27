@@ -1,64 +1,125 @@
-import json
-import os
-import openpyxl
-from openpyxl.styles import PatternFill
-from openpyxl.comments import Comment
-from typing import List
-from app.schemas.comparison import ComparisonResult
+"""Аннотация Excel: заливка, комментарии, ссылки (ТЗ раздел 12)."""
+from __future__ import annotations
 
-RED_FILL = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+import logging
+from copy import copy
+from openpyxl import load_workbook
+from openpyxl.comments import Comment
+from openpyxl.styles import PatternFill
+from openpyxl.utils import get_column_letter, range_boundaries
+
+from app.models.enums import JobIssueSeverity
+
+logger = logging.getLogger(__name__)
+
+# Цвета заливки по ТЗ раздел 12
+COLOR_MAP = {
+    JobIssueSeverity.RED: 'FFFFC7CE',
+    JobIssueSeverity.YELLOW: 'FFFFEB9C',
+    JobIssueSeverity.ORANGE: 'FFFFCC99',
+    JobIssueSeverity.INFO: None,  # без заливки
+}
+
 
 class ExcelAnnotator:
-    def __init__(self, template_code: str = "pril_1_main"):
-        self.template_code = template_code
-        self.config = self._load_template_config(template_code)
+    """Аннотатор Excel с поддержкой merged-ячеек."""
 
-    def _load_template_config(self, code: str) -> dict:
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        config_path = os.path.join(base_dir, "templates", f"{code}.json")
-        with open(config_path, "r", encoding="utf-8") as f:
+    def __init__(self, template_code: str, profiles_dir: str = "app/templates_profiles"):
+        self.template_code = template_code
+        self.profiles_dir = Path(profiles_dir)
+        self.config = self._load_profile()
+
+    def _load_profile(self) -> dict:
+        import json
+        profile_path = self.profiles_dir / f"{self.template_code}.json"
+        with open(profile_path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
-    def _map_issue_to_col_key(self, issue_code: str) -> str:
-        # Связываем код ошибки с конкретной колонкой в JSON-конфиге
-        mapping = {
-            "VERIFICATION_DATE_MISMATCH": "verification_date",
-            "NEXT_VERIFICATION_DATE_MISMATCH": "next_verification_date",
-            "ARSHIN_NOT_FOUND": "serial_number",
-            "MULTIPLE_MATCHES": "serial_number"
-        }
-        return mapping.get(issue_code, "serial_number")
+    def annotate_and_save(self, input_path: str, output_path: str, results: list[dict]):
+        """Основной метод: чтение, аннотация, запись (два прохода)."""
+        # Первый проход: чтение данных (data_only=True)
+        wb_data = load_workbook(input_path, data_only=True)
+        # Второй проход: запись аннотации (без data_only, чтобы сохранить стили)
+        wb = load_workbook(input_path, data_only=False)
+        sheet = self._find_sheet(wb)
+        if sheet is None:
+            raise ValueError("Лист не найден")
 
-    def annotate_and_save(self, input_path: str, output_path: str, results: List[ComparisonResult]):
-        wb = openpyxl.load_workbook(input_path)
-        sheet_name = self.config.get("sheet_name")
-        ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
-
-        for res in results:
-            row = res.device.row_number
-            group = res.device.group_name
-            
-            # Ищем колонки именно для этой группы приборов (Счетчик, ТТ или ТН)
-            try:
-                g_cfg = next(g for g in self.config["device_groups"] if g["group_name"] == group)
-            except StopIteration:
+        # Группируем результаты по строкам
+        for result in results:
+            row = result.get('excel_row')
+            if not row:
                 continue
-                
-            cols = g_cfg["columns"]
+            self._annotate_device(sheet, row, result)
 
-            # 1. Записываем ссылку на Аршин (если найдена)
-            if res.matched_record and res.matched_record.public_url:
-                link_col = cols.get("arshin_link")
-                if link_col:
-                    ws.cell(row=row, column=link_col, value=res.matched_record.public_url)
-
-            # 2. Красим ячейки и пишем комментарии по каждой ошибке
-            for issue in res.issues:
-                target_col_key = self._map_issue_to_col_key(issue.code)
-                c_idx = cols.get(target_col_key)
-                if c_idx:
-                    cell = ws.cell(row=row, column=c_idx)
-                    cell.fill = RED_FILL
-                    cell.comment = Comment(issue.message, "Arshin SaaS")
-
+        # Сохраняем
         wb.save(output_path)
+
+    def _find_sheet(self, wb):
+        patterns = self.config.get('sheet_patterns', [])
+        for sheet in wb.worksheets:
+            for pattern in patterns:
+                if pattern in sheet.title:
+                    return sheet
+        return None
+
+    def _get_anchor_cell(self, sheet, cell_ref: str):
+        """Находит верхнюю левую ячейку merged-диапазона (ТЗ 12.4)."""
+        from openpyxl.utils import coordinate_from_string, column_index_from_string
+        col_letter, row = coordinate_from_string(cell_ref)
+        col = column_index_from_string(col_letter)
+
+        for merged_range in sheet.merged_cells.ranges:
+            if col >= merged_range.min_col and col <= merged_range.max_col \
+               and row >= merged_range.min_row and row <= merged_range.max_row:
+                return f"{get_column_letter(merged_range.min_col)}{merged_range.min_row}"
+        return cell_ref
+
+    def _annotate_device(self, sheet, row: int, result: dict):
+        """Аннотация одного прибора."""
+        group_config = self._find_group_config(result['device_kind'])
+        if not group_config:
+            return
+
+        cols = group_config['columns']
+        issues = result.get('issues', [])
+        selected_url = result.get('selected_url')
+        link_overwrite_policy = self.config.get('link_overwrite_policy', 'replace')
+
+        # 1. Заливка и комментарии для каждого поля
+        for issue in issues:
+            cell_ref = issue.get('cell_ref')
+            if not cell_ref:
+                continue
+            severity = issue.get('severity')
+            color = COLOR_MAP.get(severity)
+            anchor = self._get_anchor_cell(sheet, cell_ref)
+            cell = sheet[anchor]
+            # Заливка
+            if color:
+                cell.fill = PatternFill(fill_type="solid", fgColor=color)
+            # Комментарий
+            message = issue.get('message', '')
+            if message:
+                if cell.comment:
+                    existing = cell.comment.text
+                    cell.comment = Comment(f"{existing}\n{message}", "Arshin Checker")
+                else:
+                    cell.comment = Comment(message, "Arshin Checker")
+
+        # 2. Ссылка на Аршин в столбце arshin_link
+        link_col = cols.get('arshin_link')
+        if link_col and selected_url:
+            cell_ref = f"{get_column_letter(link_col)}{row}"
+            anchor = self._get_anchor_cell(sheet, cell_ref)
+            cell = sheet[anchor]
+            if link_overwrite_policy == 'replace' or not cell.value:
+                cell.value = selected_url
+            elif link_overwrite_policy == 'append' and cell.value:
+                cell.value = f"{cell.value}; {selected_url}"
+
+    def _find_group_config(self, device_kind: str):
+        for group in self.config.get('device_groups', []):
+            if group['device_kind'] == device_kind:
+                return group
+        return None

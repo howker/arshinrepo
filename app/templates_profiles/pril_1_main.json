@@ -1,0 +1,63 @@
+{
+  "code": "pril_1_main",
+  "title": "Приложение 1.1 (Счётчики, ТТ, ТН)",
+  "sheet_patterns": ["Прил.1.1", "Сч,ТТ,ТН", "1.1"],
+  "data_start_row": 10,
+  "skip_row_markers": ["#NAME?", "#ИМЯ?", "#REF!"],
+  "context_columns": {
+    "n_pp": 1,
+    "sub_company": 2,
+    "object_name": 3,
+    "inventory_no": 4,
+    "connection_point": 5,
+    "voltage_level": 6,
+    "metering_type": 7
+  },
+  "device_groups": [
+    {
+      "device_kind": "si",
+      "block_code": "si",
+      "presence_column": 9,
+      "columns": {
+        "type": 8,
+        "serial": 9,
+        "accuracy_class": 10,
+        "manufacture_year": 11,
+        "verification_date": 12,
+        "next_verification_date": 13,
+        "arshin_link": 14
+      }
+    },
+    {
+      "device_kind": "ct",
+      "block_code": "ct",
+      "presence_column": 17,
+      "columns": {
+        "type": 15,
+        "transformation_ratio": 16,
+        "serial": 17,
+        "accuracy_class": 18,
+        "manufacture_year": 19,
+        "verification_date": 20,
+        "next_verification_date": 21,
+        "arshin_link": 22
+      }
+    },
+    {
+      "device_kind": "vt",
+      "block_code": "vt",
+      "presence_column": 25,
+      "columns": {
+        "type": 23,
+        "transformation_ratio": 24,
+        "serial": 25,
+        "accuracy_class": 26,
+        "manufacture_year": 27,
+        "verification_date": 28,
+        "next_verification_date": 29,
+        "arshin_link": 30
+      }
+    }
+  ],
+  "link_overwrite_policy": "replace"
+}
