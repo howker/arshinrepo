@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Детали проверки - Arshin Checker{% endblock %}
+
+{% block content %}
+<h1>Детали проверки</h1>
+<div id="job-info">Загрузка...</div>
+<div id="issues-list"></div>
+<a href="/" class="btn-secondary">Назад к списку</a>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const token = localStorage.getItem('token');
+if (!token) window.location.href = '/login';
+
+const jobId = window.location.pathname.split('/').pop();
+
+async function loadJob() {
+    try {
+        const resp = await fetch(`/api/jobs/${jobId}`, {
+            headers: {'Authorization': `Bearer ${token}`}
+        });
+        if (!resp.ok) throw new Error('Failed');
+        const job = await resp.json();
+        document.getElementById('job-info').innerHTML = `
+            <p><strong>Файл:</strong> ${job.source_filename}</p>
+            <p><strong>Статус:</strong> ${job.status}</p>
+            <p><strong>Всего приборов:</strong> ${job.total_items || 0}</p>
+            <p><strong>Совпало:</strong> ${job.matched_count || 0}</p>
+            <p><strong>Расхождений:</strong> ${job.mismatch_count || 0}</p>
+            <p><strong>Неоднозначно:</strong> ${job.ambiguous_count || 0}</p>
+            <p><strong>Не проверено:</strong> ${job.source_uncertain_count || 0}</p>
+        `;
+        
+        // Загружаем issues
+        const issuesResp = await fetch(`/api/jobs/${jobId}/issues`, {
+            headers: {'Authorization': `Bearer ${token}`}
+        });
+        if (issuesResp.ok) {
+            const issues = await issuesResp.json();
+            const container = document.getElementById('issues-list');
+            if (!issues.length) {
+                container.innerHTML = '<p>Нет проблем</p>';
+                return;
+            }
+            let html = '<h3>Проблемы</h3><table><tr><th>Ячейка</th><th>Код</th><th>Сообщение</th></tr>';
+            issues.forEach(issue => {
+                html += `<tr>
+                    <td>${issue.cell || '—'}</td>
+                    <td>${issue.code || '—'}</td>
+                    <td>${issue.message || ''}</td>
+                </tr>`;
+            });
+            html += '</table>';
+            container.innerHTML = html;
+        }
+    } catch (err) {
+        document.getElementById('job-info').textContent = 'Ошибка загрузки';
+    }
+}
+
+loadJob();
+</script>
+{% endblock %}

@@ -25,3 +25,7 @@ app.include_router(apirouter, prefix=settings.api_prefix)
 @app.get("/")
 async def root() -> dict[str, str]:
     return {"service": settings.app_name, "status": "ok"}
+
+# Добавляем роутер для страниц
+from app.api.routes import pages
+app.include_router(pages.router)
