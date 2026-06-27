@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, time
+from datetime import date, datetime, timedelta, time
 from typing import Any
 
 
@@ -71,8 +71,6 @@ def to_canonical_date(value: Any) -> date | None | str:
         # Excel serial number
         if isinstance(value, (int, float)) and value > 1:
             try:
-                # Excel serial date (days since 1900-01-01)
-                from datetime import datetime, timedelta
                 base = datetime(1899, 12, 30)
                 dt = base + timedelta(days=float(value))
                 return dt.date()

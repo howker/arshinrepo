@@ -1,13 +1,11 @@
 """Клиент для работы с API ФГИС «Аршин» (ТЗ раздел 9)."""
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
@@ -27,18 +25,30 @@ class ArshinUpstreamUnavailableError(RuntimeError):
 
 
 class ArshinSearchResult:
-    """Результат поиска (ТЗ 9.1)."""
+    """Результат поиска (ТЗ 9.1) с полями для аудита (ТЗ 4.7)."""
     def __init__(
         self,
         records: list[dict],
         raw_response: dict | None = None,
         result_class: CheckResultClass = CheckResultClass.SUCCESS_EMPTY,
         candidates_count: int = 0,
+        request_url: str | None = None,
+        request_params: dict | None = None,
+        http_status: int | None = None,
+        response_time_ms: int | None = None,
+        transport_error: str | None = None,
+        attempts: int = 1,
     ):
         self.records = records
         self.raw_response = raw_response or {}
         self.result_class = result_class
         self.candidates_count = candidates_count
+        self.request_url = request_url
+        self.request_params = request_params
+        self.http_status = http_status
+        self.response_time_ms = response_time_ms
+        self.transport_error = transport_error
+        self.attempts = attempts
 
 
 def _is_retryable_error(exc: BaseException) -> bool:
@@ -86,15 +96,12 @@ class ArshinClient:
         return f"{self.eapi_url}?search={serial}&rows={self.rows}"
 
     def _parse_xcdb_response(self, data: dict) -> list[dict]:
-        docs = data.get("response", {}).get("docs", [])
-        return docs
+        return data.get("response", {}).get("docs", [])
 
     def _parse_eapi_response(self, data: dict) -> list[dict]:
-        items = data.get("items", [])
-        return items
+        return data.get("items", [])
 
     def _map_field(self, record: dict, field_map: dict) -> dict:
-        """Маппинг полей с фолбэками (ТЗ 1.8, 9.1)."""
         mapped = {}
         for target, source in field_map.items():
             value = None
@@ -109,7 +116,6 @@ class ArshinClient:
         return mapped
 
     def _normalize_candidate(self, record: dict, mode: str) -> dict:
-        """Нормализация записи Аршина в единый формат."""
         if mode == "xcdb":
             field_map = {
                 "vri_id": "vri_id",
@@ -135,7 +141,6 @@ class ArshinClient:
                 "org_title": "org_title",
             }
         raw = self._map_field(record, field_map)
-        # Очистка и преобразование
         result = {}
         for k, v in raw.items():
             if v is None:
@@ -143,7 +148,6 @@ class ArshinClient:
             if isinstance(v, str):
                 v = v.strip()
             result[k] = v
-        # URL карточки
         if result.get("vri_id"):
             result["card_url"] = f"{self.card_url}/{result['vri_id']}"
         return result
@@ -154,17 +158,30 @@ class ArshinClient:
         wait=wait_exponential(multiplier=2, min=2, max=20),
         reraise=True,
     )
-    def _make_request(self, url: str, serial: str, attempt: int = 1) -> tuple[dict, float]:
-        """Выполнение запроса с ретраями (ТЗ 9.3)."""
+    def _make_request(self, url: str, serial: str, attempt: int = 1) -> dict:
+        """Выполнение запроса с ретраями (ТЗ 9.3), возвращает словарь с деталями."""
         self._throttle()
         start_time = time.time()
+        result = {
+            "url": url,
+            "params": {},
+            "http_status": None,
+            "response_time_ms": None,
+            "transport_error": None,
+            "data": None,
+        }
         try:
             resp = self._client.get(url)
-            elapsed = (time.time() - start_time) * 1000  # ms
+            elapsed = (time.time() - start_time) * 1000
+            result["response_time_ms"] = elapsed
+            result["http_status"] = resp.status_code
             resp.raise_for_status()
-            return resp.json(), elapsed
+            result["data"] = resp.json()
+            return result
         except Exception as e:
             elapsed = (time.time() - start_time) * 1000
+            result["response_time_ms"] = elapsed
+            result["transport_error"] = str(e)
             logger.warning(
                 "Arshin request failed (attempt %s): %s",
                 attempt, str(e), extra={"serial": serial, "url": url}
@@ -196,7 +213,6 @@ class ArshinClient:
             "applicability", "org_title"
         ]
 
-        # Основной запрос (xcdb по умолчанию)
         if mode == "xcdb":
             url = self._build_xcdb_url(serial_norm, fields)
             parse_func = self._parse_xcdb_response
@@ -204,15 +220,16 @@ class ArshinClient:
             url = self._build_eapi_url(serial_norm)
             parse_func = self._parse_eapi_response
             if self.year_sweep:
-                # Если включен перебор по годам (ТЗ 9.1) — реализуем упрощённо
-                # В реальности делаем несколько запросов с year=... — пропустим для краткости
+                # Упрощённо: можно добавить перебор по годам, но пропустим
                 pass
 
         # Выполнение запроса с ретраями
         last_error = None
+        req_result = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                data, elapsed = self._make_request(url, serial_norm, attempt)
+                req_result = self._make_request(url, serial_norm, attempt)
+                data = req_result["data"]
                 break
             except Exception as e:
                 last_error = e
@@ -225,32 +242,38 @@ class ArshinClient:
         # Парсинг ответа
         records_raw = parse_func(data)
         if not records_raw and mode == "eapi":
-            # Доп. запрос с типом (ТЗ 9.1)
             if type_norm:
                 alt_url = self._build_eapi_url(f"{type_norm} {serial_norm}")
                 try:
-                    alt_data, _ = self._make_request(alt_url, serial_norm, 1)
-                    records_raw = parse_func(alt_data)
+                    req_result_alt = self._make_request(alt_url, serial_norm, 1)
+                    records_raw = parse_func(req_result_alt["data"])
+                    # Если альтернативный запрос сработал, используем его результат для аудита
+                    if records_raw and req_result_alt:
+                        req_result = req_result_alt
                 except Exception:
                     pass
 
-        # Нормализация записей
         records = [self._normalize_candidate(r, mode) for r in records_raw]
 
-        # Определение result_class (ТЗ 9.3)
         if records:
             result_class = CheckResultClass.SUCCESS_WITH_MATCH
         else:
             result_class = CheckResultClass.SUCCESS_EMPTY
 
+        # Формируем результат с аудит-полями
         result = ArshinSearchResult(
             records=records,
             raw_response=data,
             result_class=result_class,
             candidates_count=len(records),
+            request_url=req_result.get("url") if req_result else None,
+            request_params=req_result.get("params") if req_result else None,
+            http_status=req_result.get("http_status") if req_result else None,
+            response_time_ms=req_result.get("response_time_ms") if req_result else None,
+            transport_error=req_result.get("transport_error") if req_result else None,
+            attempts=self.max_retries,
         )
 
-        # Сохраняем в кэш
         self._cache[cache_key] = result
         return result
 

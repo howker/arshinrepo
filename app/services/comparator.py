@@ -5,7 +5,7 @@ import logging
 from datetime import date
 from typing import Any
 
-from app.models.enums import IssueCode, JobIssueSeverity, JobItemStatus
+from app.models.enums import IssueCode, JobIssueSeverity, JobItemStatus, CheckResultClass
 from app.excel.normalize import to_canonical_date, extract_vri_from_link
 
 logger = logging.getLogger(__name__)
