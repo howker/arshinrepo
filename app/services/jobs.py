@@ -60,15 +60,6 @@ def process_job_upload(
         logger.error("Job %s file upload failed: %s", job_uuid, e)
         raise HTTPException(status_code=500, detail="Storage upload failed")
 
-    file_obj = FileObject(
-        job_id=job_uuid,
-        kind=FileObjectType.SOURCE,
-        path=relative_path,
-        size_bytes=file_size,
-    )
-    db.add(file_obj)
-    db.flush()
-
     job = Job(
         id=job_uuid,
         user_id=user.id,
@@ -77,6 +68,16 @@ def process_job_upload(
         source_file_path=relative_path,
     )
     db.add(job)
+    db.flush()  # Job вставлен в jobs — job_id теперь существует для FK
+
+    file_obj = FileObject(
+        job_id=job_uuid,
+        kind=FileObjectType.SOURCE,
+        path=relative_path,
+        size_bytes=file_size,
+    )
+    db.add(file_obj)
+
     db.commit()
     db.refresh(job)
 
