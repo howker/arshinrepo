@@ -20,10 +20,13 @@ def normalize_string(value: Any) -> str | None:
     return value if value else None
 
 
-def normalize_serial_for_comparison(value: str | None) -> str | None:
+def normalize_serial_for_comparison(value: Any) -> str | None:
     """Нормализация серийного номера для сравнения (ТЗ 8.1)."""
     if value is None:
         return None
+    # Приводим к строке
+    if not isinstance(value, str):
+        value = str(value)
     # Берём часть до '/' (заводской номер)
     if '/' in value:
         value = value.split('/')[0]
@@ -32,10 +35,13 @@ def normalize_serial_for_comparison(value: str | None) -> str | None:
     return cleaned.upper() if cleaned else None
 
 
-def normalize_serial_for_request(value: str | None) -> str | None:
+def normalize_serial_for_request(value: Any) -> str | None:
     """Очистка серийника для запроса в Аршин (ТЗ 8.1)."""
     if value is None:
         return None
+    # Приводим к строке
+    if not isinstance(value, str):
+        value = str(value)
     # Удаляем только пробелы и переносы, но оставляем спецсимволы
     cleaned = re.sub(r'[\r\n\t\x00-\x1f\x7f]', '', value)
     cleaned = ' '.join(cleaned.split())
