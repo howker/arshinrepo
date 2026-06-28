@@ -45,7 +45,8 @@ class Job(BaseModel):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Отношения
     items = relationship("JobItem", back_populates="job", cascade="all, delete-orphan")
     issues = relationship("JobIssue", back_populates="job", cascade="all, delete-orphan")
     files = relationship("FileObject", back_populates="job", cascade="all, delete-orphan")
-    audit_logs = relationship("ArshinAudit", back_populates="job", cascade="all, delete-orphan")
+    user = relationship("User", back_populates="jobs")

@@ -35,5 +35,5 @@ class AuditLog(BaseModel):
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    user = relationship("User", back_populates="audit_logs")
-    job = relationship("Job", back_populates="audit_logs")
+    user = relationship("User")
+    job = relationship("Job")

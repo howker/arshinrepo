@@ -44,4 +44,4 @@ class ArshinAudit(BaseModel):
         index=True,
     )
 
-    job = relationship("Job", back_populates="audit_logs")
+    job = relationship("Job")

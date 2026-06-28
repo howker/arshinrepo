@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api.health import router as health_router
 from app.api.router import apirouter
@@ -18,13 +19,11 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# Монтируем статику раньше всех роутеров
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
 app.include_router(health_router, tags=["health"])
 app.include_router(apirouter, prefix=settings.api_prefix)
-
-
-@app.get("/")
-async def root() -> dict[str, str]:
-    return {"service": settings.app_name, "status": "ok"}
 
 # Добавляем роутер для страниц
 from app.api.routes import pages

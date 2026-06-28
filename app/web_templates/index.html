@@ -23,10 +23,42 @@
 
 {% block extra_scripts %}
 <script>
-let jobs = [];
-let pollInterval = null;
+console.log("🔵 index.html загружен");
 const token = localStorage.getItem('token');
-if (!token) window.location.href = '/login';
+console.log("🔵 Токен из localStorage:", token);
+
+if (!token) {
+    console.log("🔴 Токен отсутствует, редирект на логин");
+    window.location.href = '/login';
+} else {
+    console.log("✅ Токен есть, загружаем данные");
+    // Загрузка списка заданий
+    fetch('/api/jobs', {
+        headers: {'Authorization': `Bearer ${token}`}
+    })
+    .then(res => {
+        if (!res.ok) throw new Error('Ошибка загрузки');
+        return res.json();
+    })
+    .then(jobs => {
+        console.log("📦 Jobs:", jobs);
+        const list = document.getElementById('jobs-list');
+        if (jobs.length === 0) {
+            list.innerHTML = '<p>Нет заданий</p>';
+        } else {
+            let html = '<ul>';
+            jobs.forEach(job => {
+                html += `<li><a href="/jobs/${job.id}">${job.source_filename} (${job.status})</a></li>`;
+            });
+            html += '</ul>';
+            list.innerHTML = html;
+        }
+    })
+    .catch(err => {
+        console.error("❌ Ошибка загрузки заданий:", err);
+        document.getElementById('jobs-list').innerHTML = '<p style="color:red;">Ошибка загрузки</p>';
+    });
+}
 
 // Загрузка файла
 document.getElementById('upload-btn').addEventListener('click', () => {
@@ -39,7 +71,7 @@ document.getElementById('upload-form').addEventListener('submit', async (e) => {
     const formData = new FormData(form);
     const statusDiv = document.getElementById('upload-status');
     statusDiv.textContent = 'Загрузка...';
-    
+
     try {
         const resp = await fetch('/api/jobs/upload', {
             method: 'POST',
@@ -48,84 +80,15 @@ document.getElementById('upload-form').addEventListener('submit', async (e) => {
         });
         const result = await resp.json();
         if (resp.ok) {
-            statusDiv.textContent = 'Файл загружен!';
-            loadJobs();
+            statusDiv.textContent = '✅ Файл загружен!';
+            setTimeout(() => window.location.reload(), 1500);
         } else {
-            statusDiv.textContent = 'Ошибка: ' + (result.detail || 'неизвестная');
+            statusDiv.textContent = '❌ Ошибка: ' + (result.detail || 'неизвестная');
         }
     } catch (err) {
-        statusDiv.textContent = 'Ошибка сети';
+        statusDiv.textContent = '❌ Ошибка сети';
+        console.error(err);
     }
 });
-
-// Загрузка списка jobs
-async function loadJobs() {
-    try {
-        const resp = await fetch('/api/jobs', {
-            headers: {'Authorization': `Bearer ${token}`}
-        });
-        if (!resp.ok) throw new Error('Failed to fetch jobs');
-        jobs = await resp.json();
-        renderJobs();
-    } catch (err) {
-        document.getElementById('jobs-list').innerHTML = '<p>Ошибка загрузки списка</p>';
-    }
-}
-
-function renderJobs() {
-    const container = document.getElementById('jobs-list');
-    if (!jobs.length) {
-        container.innerHTML = '<p>Нет проверок. Загрузите файл!</p>';
-        return;
-    }
-    let html = '<table><thead><tr><th>Файл</th><th>Статус</th><th>Всего</th><th>Совпало</th><th>Расхожд.</th><th>Неоднозн.</th><th>Действия</th></tr></thead><tbody>';
-    jobs.forEach(job => {
-        const status = job.status || 'uploaded';
-        const label = {
-            'uploaded': 'Загружен',
-            'queued': 'В очереди',
-            'processing': 'Обработка...',
-            'completed': '✅ Завершён',
-            'completed_with_issues': '⚠️ С ошибками',
-            'failed': '❌ Ошибка',
-            'failed_source_unavailable': '🔴 Аршин недоступен'
-        }[status] || status;
-        const resultBtn = (job.status === 'completed' || job.status === 'completed_with_issues')
-            ? `<a href="/api/jobs/${job.id}/download/result" class="btn-small">Скачать результат</a>`
-            : (job.status === 'processing' || job.status === 'queued') ? '⏳ Обработка...' : '—';
-        const runBtn = (job.status === 'uploaded' || job.status === 'failed' || job.status === 'failed_source_unavailable')
-            ? `<button class="btn-run" data-job-id="${job.id}">Запустить</button>`
-            : '—';
-        html += `<tr>
-            <td>${job.source_filename || '—'}</td>
-            <td>${label}</td>
-            <td>${job.total_items || 0}</td>
-            <td>${job.matched_count || 0}</td>
-            <td>${job.mismatch_count || 0}</td>
-            <td>${job.ambiguous_count || 0}</td>
-            <td>${resultBtn} ${runBtn}</td>
-        </tr>`;
-    });
-    html += '</tbody></table>';
-    container.innerHTML = html;
-
-    // Обработчики для кнопок "Запустить"
-    document.querySelectorAll('.btn-run').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const jobId = btn.dataset.jobId;
-            try {
-                const resp = await fetch(`/api/jobs/${jobId}/run`, {
-                    method: 'POST',
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
-                if (resp.ok) loadJobs();
-            } catch (err) {}
-        });
-    });
-}
-
-// Периодическое обновление
-loadJobs();
-setInterval(loadJobs, 5000);
 </script>
 {% endblock %}
