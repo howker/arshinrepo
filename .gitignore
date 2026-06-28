@@ -20,3 +20,8 @@ celerybeat-schedule
 
 node_modules/
 *.tsbuildinfo
+
+# Пользовательские загрузки и результаты
+storage/uploads/
+storage/results/
+*.bak
