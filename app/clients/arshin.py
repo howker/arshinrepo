@@ -12,6 +12,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from app.core.config import get_settings
 from app.models.enums import CheckResultClass
+from app.excel.normalize import to_canonical_date
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,8 @@ class ArshinClient:
                 continue
             if isinstance(v, str):
                 v = v.strip()
+            if k in {"verification_date", "valid_date"}:
+                v = to_canonical_date(v)
             result[k] = v
         if result.get("vri_id"):
             result["card_url"] = f"{self.card_url}/{result['vri_id']}"
