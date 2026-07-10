@@ -5,6 +5,11 @@
 {% block content %}
 <h1>Детали проверки</h1>
 <div id="job-info">Загрузка...</div>
+<div id="actions">
+    <button id="run-btn" style="display:none;">Запустить проверку</button>
+    <button id="download-btn" style="display:none;">Скачать результат</button>
+    <button id="cancel-btn" style="display:none;">Прервать</button>
+</div>
 <div id="issues-list"></div>
 <a href="/" class="btn-secondary">Назад к списку</a>
 {% endblock %}
@@ -15,6 +20,7 @@ const token = localStorage.getItem('token');
 if (!token) window.location.href = '/login';
 
 const jobId = window.location.pathname.split('/').pop();
+let pollInterval = null;
 
 async function loadJob() {
     try {
@@ -23,16 +29,87 @@ async function loadJob() {
         });
         if (!resp.ok) throw new Error('Failed');
         const job = await resp.json();
+        
         document.getElementById('job-info').innerHTML = `
             <p><strong>Файл:</strong> ${job.source_filename}</p>
-            <p><strong>Статус:</strong> ${job.status}</p>
+            <p><strong>Статус:</strong> <span id="job-status">${job.status}</span></p>
             <p><strong>Всего приборов:</strong> ${job.total_items || 0}</p>
             <p><strong>Совпало:</strong> ${job.matched_count || 0}</p>
             <p><strong>Расхождений:</strong> ${job.mismatch_count || 0}</p>
             <p><strong>Неоднозначно:</strong> ${job.ambiguous_count || 0}</p>
             <p><strong>Не проверено:</strong> ${job.source_uncertain_count || 0}</p>
+            <p><strong>Заглушки дат:</strong> ${job.placeholder_count || 0}</p>
         `;
-        
+
+        // Кнопка запуска
+        const runBtn = document.getElementById('run-btn');
+        if (job.status === 'uploaded' || job.status === 'failed') {
+            runBtn.style.display = 'inline-block';
+            runBtn.onclick = async () => {
+                runBtn.disabled = true;
+                runBtn.textContent = 'Запускаем...';
+                try {
+                    const resp = await fetch(`/api/jobs/${jobId}/run`, {
+                        method: 'POST',
+                        headers: {'Authorization': `Bearer ${token}`}
+                    });
+                    if (resp.ok) {
+                        runBtn.textContent = '✅ Запущено';
+                        setTimeout(() => runBtn.style.display = 'none', 2000);
+                        loadJob(); // сразу обновить статус
+                    } else {
+                        alert('Ошибка запуска');
+                        runBtn.textContent = 'Запустить проверку';
+                        runBtn.disabled = false;
+                    }
+                } catch (e) {
+                    alert('Ошибка сети');
+                    runBtn.textContent = 'Запустить проверку';
+                    runBtn.disabled = false;
+                }
+            };
+        } else {
+            runBtn.style.display = 'none';
+        }
+
+        // Кнопка скачивания
+        const downloadBtn = document.getElementById('download-btn');
+        if (job.status === 'completed' || job.status === 'completed_with_issues') {
+            downloadBtn.style.display = 'inline-block';
+            downloadBtn.onclick = () => {
+                window.location.href = `/api/jobs/${jobId}/download/result?token=${token}`;
+            };
+        } else {
+            downloadBtn.style.display = 'none';
+        }
+
+        // Кнопка отмены
+        const cancelBtn = document.getElementById('cancel-btn');
+        if (job.status === 'queued' || job.status === 'processing') {
+            cancelBtn.style.display = 'inline-block';
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Прервать';
+            cancelBtn.onclick = async () => {
+                if (!window.confirm('Прервать проверку? Уже обработанные приборы сохранятся.')) return;
+                cancelBtn.disabled = true;
+                cancelBtn.textContent = 'Прерываем...';
+                try {
+                    const resp = await fetch(`/api/jobs/${jobId}/cancel`, {
+                        method: 'POST',
+                        headers: {'Authorization': `Bearer ${token}`}
+                    });
+                    if (!resp.ok) throw new Error('Cancel request failed');
+                    loadJob();
+                } catch (e) {
+                    alert('Не удалось прервать проверку');
+                    cancelBtn.disabled = false;
+                    cancelBtn.textContent = 'Прервать';
+                }
+            };
+        } else {
+            cancelBtn.style.display = 'none';
+        }
+
         // Загружаем issues
         const issuesResp = await fetch(`/api/jobs/${jobId}/issues`, {
             headers: {'Authorization': `Bearer ${token}`}
@@ -55,6 +132,20 @@ async function loadJob() {
             html += '</table>';
             container.innerHTML = html;
         }
+
+        // Поллинг статуса, если не завершено
+        const statusText = document.getElementById('job-status');
+        if (job.status === 'processing' || job.status === 'queued') {
+            if (!pollInterval) {
+                pollInterval = setInterval(loadJob, 3000);
+            }
+        } else {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
+
     } catch (err) {
         document.getElementById('job-info').textContent = 'Ошибка загрузки';
     }

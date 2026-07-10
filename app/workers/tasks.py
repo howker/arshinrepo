@@ -26,7 +26,7 @@ from app.models.enums import (
 from app.excel.parser import TemplateDrivenParser, TemplateNotMatchedError
 from app.excel.annotator import ExcelAnnotator
 from app.clients.arshin import arshin_client, ArshinRateLimitError, ArshinUpstreamUnavailableError
-from app.services.matcher import select_best_match
+from app.services.matcher import select_best_match, ensure_date, ensure_date
 from app.services.comparator import compare_device
 from app.services.report import build_report, save_report_to_json
 
@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 def process_excel_job(job_id_str: str) -> str:
     """Основная задача обработки Excel (последовательный пайплайн)."""
     db = SessionLocal()
+    settings = get_settings()
     job = db.query(Job).filter(Job.id == job_id_str).first()
     if not job:
         logger.error("Job %s not found", job_id_str)
@@ -86,6 +87,14 @@ def process_excel_job(job_id_str: str) -> str:
         all_results = []
 
         for idx, device in enumerate(devices, 1):
+            db.refresh(job)
+            if job.status == JobStatus.CANCELLED:
+                logger.info("Job %s cancelled before device %d/%d", job_id_str, idx, len(devices))
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                db.close()
+                return f"Cancelled after {idx - 1} of {len(devices)} devices"
+
             try:
                 logger.info("Processing device %d/%d: %s", idx, len(devices), device.get('serial_norm'))
 
@@ -142,13 +151,13 @@ def process_excel_job(job_id_str: str) -> str:
                 job_check = JobItemCheck(
                     job_item_id=job_item.id,
                     arshin_found=bool(selected),
-                    selected_vri_id=selected.get('vri_id'),
-                    selected_url=selected.get('card_url'),
-                    arshin_type=selected.get('mi_type'),
-                    arshin_serial=selected.get('mi_number'),
-                    arshin_verification_date=selected.get('verification_date'),
-                    arshin_valid_date=selected.get('valid_date'),
-                    arshin_applicability=selected.get('applicability'),
+                    selected_vri_id=selected.get("vri_id"),
+                    selected_url=selected.get("card_url"),
+                    arshin_type=selected.get("mi_type"),
+                    arshin_serial=selected.get("mi_number"),
+                    arshin_verification_date=ensure_date(selected.get("verification_date")),
+                    arshin_valid_date=ensure_date(selected.get("valid_date")),
+                    arshin_applicability=selected.get("applicability"),
                     candidates_count=match_result.candidates_count,
                     decision_reason=match_result.decision_reason,
                     result_class=match_result.result_class,
@@ -173,7 +182,7 @@ def process_excel_job(job_id_str: str) -> str:
                     job_id=job.id,
                     job_item_id=job_item.id,
                     attempt_no=arshin_result.attempts,
-                    endpoint_mode=settings.arshin_api_mode,
+                    endpoint_mode=get_settings().arshin_api_mode,
                     request_url=arshin_result.request_url or "",
                     request_params_json=arshin_result.request_params,
                     http_status=arshin_result.http_status,

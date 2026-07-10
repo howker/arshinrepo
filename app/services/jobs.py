@@ -127,6 +127,24 @@ def run_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
     return job
 
 
+def cancel_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
+    """Отмена задачи (кооперативная, проверяется воркером перед каждым СИ)."""
+    job = get_job_for_user(db, user, job_id)
+
+    if job.status not in {JobStatus.QUEUED, JobStatus.PROCESSING}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job with status '{job.status.value}' cannot be cancelled",
+        )
+
+    job.status = JobStatus.CANCELLED
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    logger.info("Job %s cancellation requested by user %s", job.id, user.id)
+    return job
+
+
 def get_job_issues_for_user(
     db: Session,
     user: User,

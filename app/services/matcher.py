@@ -40,10 +40,8 @@ def normalize_serial_for_gate(serial: str) -> str:
     """Нормализация для жёсткого сравнения (ТЗ 8.1, 10.1)."""
     if not serial:
         return ""
-    # Берём часть до '/'
     if '/' in serial:
         serial = serial.split('/')[0]
-    # Удаляем пробелы, дефисы, точки, подчёркивания
     return re.sub(r'[\s\-_\.]', '', serial).upper()
 
 
@@ -51,16 +49,33 @@ def normalize_type_for_score(type_val: str) -> str:
     """Нормализация типа для сравнения (ТЗ 10.2)."""
     if not type_val:
         return ""
-    # Удаляем пробелы и дефисы
     return re.sub(r'[\s\-]', '', type_val).upper()
 
 
-def is_today_in_interval(verification_date: date | None, valid_date: date | None) -> bool:
-    """Проверяет, покрывает ли интервал [verification_date, valid_date] сегодняшний день."""
-    if not verification_date or not valid_date:
+def ensure_date(val: Any) -> date | None:
+    """Безопасно конвертирует строку в date, если это возможно."""
+    if isinstance(val, date):
+        return val
+    if isinstance(val, str):
+        val = val.strip()
+        if not val:
+            return None
+        for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(val, fmt).date()
+            except ValueError:
+                pass
+    return None
+
+
+def is_today_in_interval(verification_date: Any, valid_date: Any) -> bool:
+    """Проверяет, покрывает ли интервал сегодняшний день."""
+    vd = ensure_date(verification_date)
+    valid = ensure_date(valid_date)
+    if not vd or not valid:
         return False
     today = datetime.now().date()
-    return verification_date <= today <= valid_date
+    return vd <= today <= valid
 
 
 def select_best_match(
@@ -77,7 +92,7 @@ def select_best_match(
             decision_reason="Нет записей в Аршине",
         )
 
-    # 1. Жёсткий серийник-гейт (ТЗ 10.1)
+    # 1. Жёсткий серийник-гейт
     gate_serial = normalize_serial_for_gate(item_serial_norm)
     candidates = []
     for rec in records:
@@ -93,26 +108,22 @@ def select_best_match(
             decision_reason="Нет записей с точным совпадением серийника",
         )
 
-    # 2. Score внутри серийник-точных (ТЗ 10.2)
+    # 2. Score внутри серийник-точных
     scored = []
     for rec in candidates:
         score = 0
-        # Точное совпадение типа
         rec_type_norm = normalize_type_for_score(rec.get("mi_type", ""))
         if item_type_norm and rec_type_norm:
             if rec_type_norm == normalize_type_for_score(item_type_norm):
                 score += 70
             else:
-                # Нечёткое совпадение (без external)
                 ratio = fuzzy_ratio(rec_type_norm, normalize_type_for_score(item_type_norm))
                 if ratio >= 85:
                     score += 35
 
-        # Пригодность (applicability)
         if rec.get("applicability") is True:
             score += 30
 
-        # Тай-брейк: свежесть (ТЗ 10.2)
         vd = rec.get("verification_date")
         valid = rec.get("valid_date")
         if vd and valid:
@@ -120,18 +131,17 @@ def select_best_match(
                 score += 10
         scored.append((score, rec))
 
-    # Сортировка по score (убывание), затем по verification_date (свежее выше)
+    # Сортировка по score (убывание), затем по verification_date (защита от строк)
     scored.sort(key=lambda x: (
         x[0],
-        x[1].get("verification_date") or date.min
+        ensure_date(x[1].get("verification_date")) or date.min
     ), reverse=True)
 
     best_score, best_record = scored[0]
 
-    # Проверка на неоднозначность (ТЗ 10.3)
+    # Проверка на неоднозначность
     if len(scored) > 1:
         second_score = scored[1][0]
-        # Разрыв менее 30 или разные типы — оранжевый (ambiguous)
         if best_score - second_score < 30:
             return MatchResult(
                 selected=best_record,
@@ -139,7 +149,7 @@ def select_best_match(
                 result_class=CheckResultClass.AMBIGUOUS_MULTIPLE_MATCHES,
                 decision_reason=f"Неоднозначный выбор: разрыв score {best_score - second_score}",
             )
-        # Если разные типы
+        
         best_type = normalize_type_for_score(best_record.get("mi_type", ""))
         second_type = normalize_type_for_score(scored[1][1].get("mi_type", ""))
         if best_type and second_type and best_type != second_type:
@@ -150,7 +160,6 @@ def select_best_match(
                 decision_reason="Разные типы СИ на один серийник",
             )
 
-    # Успешный выбор
     return MatchResult(
         selected=best_record,
         candidates_count=len(candidates),
