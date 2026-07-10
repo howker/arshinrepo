@@ -66,7 +66,7 @@ class ExcelAnnotator:
 
     def _get_anchor_cell(self, sheet, cell_ref: str):
         """Находит верхнюю левую ячейку merged-диапазона (ТЗ 12.4)."""
-        from openpyxl.utils import coordinate_from_string, column_index_from_string
+        from openpyxl.utils.cell import coordinate_from_string, column_index_from_string
         col_letter, row = coordinate_from_string(cell_ref)
         col = column_index_from_string(col_letter)
 
