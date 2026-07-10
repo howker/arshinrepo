@@ -1,5 +1,6 @@
 """Аннотация Excel: заливка, комментарии, ссылки (ТЗ раздел 12)."""
 from __future__ import annotations
+from pathlib import Path
 
 import logging
 from copy import copy
