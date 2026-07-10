@@ -13,11 +13,13 @@ from app.core.config import get_settings
 from app.core.storage import storage
 from app.models.job import Job
 from app.models.job_item import JobItem
+from app.models.file_object import FileObject
 from app.models.job_item_check import JobItemCheck
 from app.models.job_issue import JobIssue
 from app.models.arshin_audit import ArshinAudit
 from app.models.enums import (
     JobStatus,
+    FileObjectType,
     JobItemStatus,
     JobIssueSeverity,
     IssueCode,
@@ -277,6 +279,16 @@ def process_excel_job(job_id_str: str) -> str:
         )
 
         job.result_file_path = result_relative_path
+
+        # Регистрируем результат как FileObject, чтобы его можно было скачать
+        result_size = full_result_path.stat().st_size
+        result_file_obj = FileObject(
+            job_id=job.id,
+            kind=FileObjectType.RESULT,
+            path=result_relative_path,
+            size_bytes=result_size,
+        )
+        db.add(result_file_obj)
 
         # 5. Генерация отчёта
         report = build_report(
