@@ -53,12 +53,18 @@ def normalize_type_for_score(type_val: str) -> str:
 
 
 def ensure_date(val: Any) -> date | None:
-    """Безопасно конвертирует строку в date, если это возможно."""
+    """Безопасно конвертирует строку/datetime/date в date, если это возможно.
+    Возвращает date или None (никогда не возвращает строку "INVALID").
+    """
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
     if isinstance(val, date):
         return val
     if isinstance(val, str):
         val = val.strip()
-        if not val:
+        if not val or val == "INVALID":
             return None
         for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
             try:
@@ -66,6 +72,20 @@ def ensure_date(val: Any) -> date | None:
             except ValueError:
                 pass
     return None
+
+
+def _are_records_identical(rec_a: dict, rec_b: dict) -> bool:
+    """Проверяет, являются ли две записи Аршина дубликатами по ключевым полям."""
+    keys = ("mi_number", "mi_type", "verification_date", "valid_date", "applicability")
+    for key in keys:
+        a_val = rec_a.get(key)
+        b_val = rec_b.get(key)
+        if key in ("verification_date", "valid_date"):
+            a_val = ensure_date(a_val)
+            b_val = ensure_date(b_val)
+        if a_val != b_val:
+            return False
+    return True
 
 
 def is_today_in_interval(verification_date: Any, valid_date: Any) -> bool:
@@ -92,7 +112,6 @@ def select_best_match(
             decision_reason="Нет записей в Аршине",
         )
 
-    # 1. Жёсткий серийник-гейт
     gate_serial = normalize_serial_for_gate(item_serial_norm)
     candidates = []
     for rec in records:
@@ -108,7 +127,6 @@ def select_best_match(
             decision_reason="Нет записей с точным совпадением серийника",
         )
 
-    # 2. Score внутри серийник-точных
     scored = []
     for rec in candidates:
         score = 0
@@ -131,7 +149,6 @@ def select_best_match(
                 score += 10
         scored.append((score, rec))
 
-    # Сортировка по score (убывание), затем по verification_date (защита от строк)
     scored.sort(key=lambda x: (
         x[0],
         ensure_date(x[1].get("verification_date")) or date.min
@@ -139,17 +156,24 @@ def select_best_match(
 
     best_score, best_record = scored[0]
 
-    # Проверка на неоднозначность
     if len(scored) > 1:
         second_score = scored[1][0]
+
         if best_score - second_score < 30:
+            if best_score > 60 and _are_records_identical(best_record, scored[1][1]):
+                return MatchResult(
+                    selected=best_record,
+                    candidates_count=len(candidates),
+                    result_class=CheckResultClass.SUCCESS_WITH_MATCH,
+                    decision_reason=f"Выбран первый из идентичных дубликатов (score={best_score})",
+                )
             return MatchResult(
                 selected=best_record,
                 candidates_count=len(candidates),
                 result_class=CheckResultClass.AMBIGUOUS_MULTIPLE_MATCHES,
                 decision_reason=f"Неоднозначный выбор: разрыв score {best_score - second_score}",
             )
-        
+
         best_type = normalize_type_for_score(best_record.get("mi_type", ""))
         second_type = normalize_type_for_score(scored[1][1].get("mi_type", ""))
         if best_type and second_type and best_type != second_type:

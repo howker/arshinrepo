@@ -7,7 +7,7 @@ from typing import Any
 
 from app.models.enums import IssueCode, JobIssueSeverity, JobItemStatus, CheckResultClass
 from app.excel.normalize import to_canonical_date, extract_vri_from_link
-from app.services.matcher import normalize_serial_for_gate, normalize_type_for_score
+from app.services.matcher import normalize_serial_for_gate, normalize_type_for_score, ensure_date
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ def compare_device(
     selected = match_result.selected
     status = JobItemStatus.MATCHED
 
-    # Если нет выбранной записи
     if not selected:
         if match_result.result_class == CheckResultClass.SUCCESS_EMPTY:
             status = JobItemStatus.SOURCE_UNCERTAIN
@@ -64,7 +63,8 @@ def compare_device(
             ))
         return ComparisonResult(status, issues)
 
-    # Если результат матчинга неоднозначен, выставляем статус AMBIGUOUS и возвращаем
+    # FIX: при AMBIGUOUS добавляем issue, но НЕ делаем ранний return —
+    # проверки дат и ссылок выполняются всегда.
     if match_result.result_class == CheckResultClass.AMBIGUOUS_MULTIPLE_MATCHES:
         status = JobItemStatus.AMBIGUOUS
         issues.append(Issue(
@@ -73,9 +73,7 @@ def compare_device(
             message=f"Неоднозначный выбор: {match_result.decision_reason}",
             cell_ref=device.get('cell_refs', {}).get('serial'),
         ))
-        return ComparisonResult(status, issues, selected.get("card_url"))
 
-    # Сравнение полей
     file_type = device.get('type_norm')
     arshin_type = normalize_type_for_score(selected.get('mi_type', ''))
     if file_type and arshin_type:
@@ -100,10 +98,10 @@ def compare_device(
                 cell_ref=device.get('cell_refs', {}).get('serial'),
             ))
 
-    # Даты
+    # FIX: даты нормализуются через ensure_date() перед сравнением
     file_vd = device.get('verification_date_norm')
-    arshin_vd = selected.get('verification_date')
-    # Проверяем заглушку в файле
+    arshin_vd_raw = selected.get('verification_date')
+
     if file_vd == "INVALID":
         status = JobItemStatus.MISMATCH
         issues.append(Issue(
@@ -112,19 +110,22 @@ def compare_device(
             message="Некорректное значение даты в файле (заглушка: 31.12.1899 или 0)",
             cell_ref=device.get('cell_refs', {}).get('verification_date'),
         ))
-    elif file_vd and arshin_vd:
-        if isinstance(file_vd, date) and isinstance(arshin_vd, date):
-            if file_vd != arshin_vd:
+    else:
+        file_vd_date = ensure_date(file_vd)
+        arshin_vd_date = ensure_date(arshin_vd_raw)
+        if file_vd_date and arshin_vd_date:
+            if file_vd_date != arshin_vd_date:
                 status = JobItemStatus.MISMATCH
                 issues.append(Issue(
                     code=IssueCode.VERIFICATION_DATE_MISMATCH,
                     severity=JobIssueSeverity.RED,
-                    message=f"Несовпадение даты поверки: в файле {file_vd}, в Аршине {arshin_vd}",
+                    message=f"Несовпадение даты поверки: в файле {file_vd_date}, в Аршине {arshin_vd_date}",
                     cell_ref=device.get('cell_refs', {}).get('verification_date'),
                 ))
 
     file_nd = device.get('next_date_norm')
-    arshin_valid = selected.get('valid_date')
+    arshin_valid_raw = selected.get('valid_date')
+
     if file_nd == "INVALID":
         status = JobItemStatus.MISMATCH
         issues.append(Issue(
@@ -133,32 +134,45 @@ def compare_device(
             message="Некорректное значение даты след. поверки в файле (заглушка)",
             cell_ref=device.get('cell_refs', {}).get('next_date'),
         ))
-    elif file_nd and arshin_valid:
-        if isinstance(file_nd, date) and isinstance(arshin_valid, date):
-            if file_nd != arshin_valid:
+    else:
+        file_nd_date = ensure_date(file_nd)
+        arshin_valid_date = ensure_date(arshin_valid_raw)
+        if file_nd_date and arshin_valid_date:
+            if file_nd_date != arshin_valid_date:
                 status = JobItemStatus.MISMATCH
                 issues.append(Issue(
                     code=IssueCode.NEXT_VERIFICATION_DATE_MISMATCH,
                     severity=JobIssueSeverity.RED,
-                    message=f"Несовпадение даты след. поверки: в файле {file_nd}, в Аршине {arshin_valid}",
+                    message=f"Несовпадение даты след. поверки: в файле {file_nd_date}, в Аршине {arshin_valid_date}",
                     cell_ref=device.get('cell_refs', {}).get('next_date'),
                 ))
 
-    # Ссылка
+    # FIX: сравниваем и извлечённый VRI, и сырую ссылку (если VRI не извлёкся — это MISMATCH)
     selected_url = selected.get('card_url')
     file_link_vri = device.get('link_vri')
+    file_link_raw = device.get('link_raw')
+
     if file_link_vri and selected_url:
-        file_vri_num = extract_vri_from_link(file_link_vri)
         arshin_vri_num = extract_vri_from_link(selected_url)
-        if file_vri_num and arshin_vri_num and file_vri_num != arshin_vri_num:
+        if arshin_vri_num and file_link_vri != arshin_vri_num:
             status = JobItemStatus.MISMATCH
             issues.append(Issue(
                 code=IssueCode.LINK_MISMATCH,
                 severity=JobIssueSeverity.RED,
-                message=f"Несовпадение ссылки на карточку СИ: в файле {file_link_vri}, в Аршине {selected_url}",
+                message=f"Несовпадение ссылки на карточку СИ: в файле VRI={file_link_vri}, в Аршине VRI={arshin_vri_num}",
                 cell_ref=device.get('cell_refs', {}).get('link'),
             ))
-    elif not file_link_vri and selected_url:
+    elif file_link_raw and selected_url and not file_link_vri:
+        file_link_str = str(file_link_raw).strip()
+        if file_link_str and file_link_str not in ('-', '—', '+', 'нет', 'Нет', 'паспорт', 'Паспорт'):
+            status = JobItemStatus.MISMATCH
+            issues.append(Issue(
+                code=IssueCode.LINK_MISMATCH,
+                severity=JobIssueSeverity.RED,
+                message=f"Некорректная ссылка в файле: '{file_link_str}'. Ожидалась: {selected_url}",
+                cell_ref=device.get('cell_refs', {}).get('link'),
+            ))
+    elif not file_link_raw and selected_url:
         issues.append(Issue(
             code=IssueCode.LINK_FILLED,
             severity=JobIssueSeverity.INFO,
@@ -166,7 +180,6 @@ def compare_device(
             cell_ref=device.get('cell_refs', {}).get('link'),
         ))
 
-    # Если нет ни одной ошибки — MATCH
     if not issues and status == JobItemStatus.MATCHED:
         issues.append(Issue(
             code=IssueCode.MATCH,
