@@ -74,7 +74,8 @@ class TestArshinClient:
         assert result["vri_id"] == "2-12345"
         assert result["mi_number"] == "123/456"
         assert result["mi_type"] == "ТЛШ-10"
-        assert result["verification_date"] == "2022-01-01"
+        assert result["verification_date"] == date(2022, 1, 1)
+        assert result["valid_date"] == date(2022, 12, 31)
         assert result["card_url"] == "https://fgis.gost.ru/fundmetrology/cm/results/2-12345"
 
     def test_normalize_candidate_eapi(self):

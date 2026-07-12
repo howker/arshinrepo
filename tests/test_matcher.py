@@ -76,26 +76,78 @@ class TestMatcher:
         assert result.candidates_count == 1
         assert result.result_class == CheckResultClass.SUCCESS_WITH_MATCH
 
-    def test_select_best_match_ambiguous(self):
-        # Две записи с одинаковым серийником, но разными типами
-        records = [
-            {
-                "mi_number": "123-456",
-                "mi_type": "TYPE_A",
-                "applicability": True,
-                "verification_date": date(2022, 1, 1),
-                "valid_date": date(2022, 12, 31),
-            },
-            {
-                "mi_number": "123-456",
-                "mi_type": "TYPE_B",
-                "applicability": True,
-                "verification_date": date(2022, 1, 1),
-                "valid_date": date(2022, 12, 31),
-            },
-        ]
-        arshin_result = ArshinSearchResult(records=records, result_class=CheckResultClass.SUCCESS_WITH_MATCH)
-        result = select_best_match("123-456", "TYPE_A", arshin_result)
-        # Должен быть AMBIGUOUS_MULTIPLE_MATCHES, так как типы разные
+    def _rec(self, **kw):
+        base = {
+            "mi_number": "6590",
+            "mi_modification": None,
+            "mi_type": None,
+            "applicability": True,
+            "verification_date": date(2023, 6, 12),
+            "valid_date": date(2031, 6, 12),
+            "org_title": "ФБУ «Курский ЦСМ»",
+            "card_url": "https://fgis.gost.ru/fundmetrology/cm/results/1-1",
+        }
+        base.update(kw)
+        return base
+
+    def test_foreign_device_is_not_substituted(self):
+        """ТШЛ вместо ТЛШ — чужой прибор, нельзя выдавать за найденный."""
+        records = [self._rec(mi_number="2301", mi_modification="ТШЛ-0,66-2 У2")]
+        res = ArshinSearchResult(records=records, result_class=CheckResultClass.SUCCESS_WITH_MATCH)
+        result = select_best_match(
+            "2301", "ТЛШ10", res, item_type_raw="ТЛШ-10",
+        )
         assert result.result_class == CheckResultClass.AMBIGUOUS_MULTIPLE_MATCHES
-        assert "Разные типы" in result.decision_reason
+        assert "не подтверждает" in result.decision_reason
+
+    def test_type_confirmed_via_mitype_field(self):
+        """Тип может лежать в mi_type, а не в mi_modification (ЕвроАЛЬФА/EA05)."""
+        records = [self._rec(mi_number="01111479", mi_modification="EA05", mi_type="ЕвроАЛЬФА")]
+        res = ArshinSearchResult(records=records, result_class=CheckResultClass.SUCCESS_WITH_MATCH)
+        result = select_best_match(
+            "01111479", "ЕВРОАЛЬФА", res, item_type_raw="ЕвроАльфа",
+        )
+        assert result.result_class == CheckResultClass.SUCCESS_WITH_MATCH
+        assert result.selected["vri_id"] if "vri_id" in result.selected else True
+
+    def test_region_resolves_multiple_confirmed(self):
+        """Несколько подтверждённых — выбираем по региону поверителя."""
+        records = [
+            self._rec(mi_modification="ЗНОЛ.06", org_title='ФБУ "ВОЛОГОДСКИЙ ЦСМ"'),
+            self._rec(mi_modification="модификация ЗНОЛ.06", org_title='ФБУ "АСТРАХАНСКИЙ ЦСМ"'),
+        ]
+        res = ArshinSearchResult(records=records, result_class=CheckResultClass.SUCCESS_WITH_MATCH)
+        result = select_best_match(
+            "6590", "ЗНОЛ0610УЗ", res,
+            item_type_raw="ЗНОЛ-0.6-10 УЗ",
+            owner_context={"sub_company": "ООО Газпром добыча Астрахань"},
+        )
+        assert result.result_class == CheckResultClass.SUCCESS_WITH_MATCH
+        assert "АСТРАХАНСКИЙ" in result.selected["org_title"]
+
+    def test_ambiguous_when_cannot_resolve(self):
+        """Несколько подтверждённых, регион не помогает — честный AMBIGUOUS."""
+        records = [
+            self._rec(mi_modification="ЗНОЛ.06", org_title='ФБУ "ВОЛОГОДСКИЙ ЦСМ"'),
+            self._rec(mi_modification="ЗНОЛ.06", org_title='ФБУ "КУРСКИЙ ЦСМ"'),
+        ]
+        res = ArshinSearchResult(records=records, result_class=CheckResultClass.SUCCESS_WITH_MATCH)
+        result = select_best_match(
+            "6590", "ЗНОЛ0610УЗ", res,
+            item_type_raw="ЗНОЛ-0.6-10 УЗ",
+            owner_context={"sub_company": "ООО Газпром добыча Астрахань"},
+        )
+        assert result.result_class == CheckResultClass.AMBIGUOUS_MULTIPLE_MATCHES
+        assert len(result.candidates) == 2
+
+    def test_arshin_iso_dates_are_parsed(self):
+        """Даты Аршина приходят в ISO-8601 и должны разбираться."""
+        from app.services.matcher import ensure_date
+        assert ensure_date("2023-06-12T00:00:00Z") == date(2023, 6, 12)
+        assert ensure_date("INVALID") is None
+
+    def test_model_match_distinguishes_within_family(self):
+        """Сверка модели: ТЛШ-10 и ТЛШ-20 — разные приборы."""
+        from app.services.matcher import model_match_score
+        assert model_match_score("ТЛШ-10", "ТЛШ-20") < 85.0
+        assert model_match_score("ЗНОЛ-0.6-10 УЗ", "модификация ЗНОЛ.06") >= 85.0

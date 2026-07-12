@@ -12,6 +12,7 @@ from app.services.matcher import (
     normalize_type_for_score,
     ensure_date,
     type_confirmation_score,
+    model_match_score,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,8 +107,10 @@ def compare_device(
     arshin_mod = selected.get('mi_modification')
     arshin_mitype = selected.get('mi_type')
     if file_type_raw and (arshin_mod or arshin_mitype):
-        conf = type_confirmation_score(file_type_raw, arshin_mod, arshin_mitype)
-        if conf < 75.0:
+        # Строгая сверка модели: корневого совпадения мало, ТЛШ-10 и ТЛШ-20 —
+        # разные приборы, хотя семейство у них одно.
+        conf = model_match_score(file_type_raw, arshin_mod, arshin_mitype)
+        if conf < 85.0:
             shown = arshin_mitype or arshin_mod
             status = JobItemStatus.MISMATCH
             issues.append(Issue(

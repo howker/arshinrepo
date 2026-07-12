@@ -15,6 +15,7 @@ def test_ready():
     assert response.json() == {"status": "ready"}
 
 def test_root():
+    # Корень отдаёт HTML-страницу (Jinja), а не JSON
     response = client.get("/")
     assert response.status_code == 200
-    assert "service" in response.json()
+    assert "text/html" in response.headers["content-type"]

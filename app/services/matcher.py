@@ -116,6 +116,50 @@ def type_confirmation_score(
     )
 
 
+def normalize_model_full(value: Any) -> str:
+    """Модель целиком, без пунктуации и регистра: 'ЗНОЛ-0.6-10 УЗ' -> 'ЗНОЛ0610УЗ'.
+
+    В отличие от model_root(), СОХРАНЯЕТ цифры — они различают модели внутри
+    одного семейства (ТЛШ-10 против ТЛШ-20).
+    """
+    if not value:
+        return ""
+    s = re.sub(r'МОДИФИКАЦИЯ|ИСПОЛНЕНИЕ|ТИП', '', str(value).upper())
+    return re.sub(r'[^А-ЯA-Z0-9]', '', s)
+
+
+def model_match_score(file_type: Any, arshin_modification: Any, arshin_mitype: Any = None) -> float:
+    """Строгая сверка модели для КОМПАРАТОРА (не для идентификации).
+
+    Идентификация (type_confirmation_score) работает по корню и потому не видит
+    разницы между ТЛШ-10 и ТЛШ-20 — для поиска семейства это правильно.
+    Здесь же нужно поймать реальное расхождение модели, поэтому сравниваем
+    модель целиком, игнорируя только пунктуацию и регистр.
+    """
+    f = normalize_model_full(file_type)
+    if not f:
+        return 0.0
+
+    best = 0.0
+    for candidate in (arshin_modification, arshin_mitype):
+        if not candidate:
+            continue
+        if str(candidate).strip().lower() in EMPTY_VALUES:
+            continue
+        a = normalize_model_full(candidate)
+        if not a:
+            continue
+        if f == a:
+            return 100.0
+        # Одна модель может быть записью другой с суффиксом исполнения
+        # ("ЗНОЛ06" в Аршине против "ЗНОЛ0610УЗ" в файле)
+        if f.startswith(a) or a.startswith(f):
+            best = max(best, 90.0)
+        else:
+            best = max(best, fuzzy_ratio(f, a))
+    return best
+
+
 def ensure_date(val: Any) -> date | None:
     """Безопасно конвертирует значение в date. Никогда не возвращает 'INVALID'."""
     if val is None:
