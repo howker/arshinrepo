@@ -74,20 +74,18 @@ def model_root(value: Any) -> str:
     return m.group(0) if m else ""
 
 
-def type_confirmation_score(file_type: str, arshin_modification: Any) -> float:
-    """Насколько модификация из Аршина подтверждает тип из файла.
+EMPTY_VALUES = ('нет данных', 'нет модификации', 'нет', '-', '—', 'none', '')
 
-    Устойчиво к опечаткам метролога (ЗНОЛ-0.6-10 УЗ / ЗНОЛ-0.6-10-УЗ / ЗНОЛ.06),
-    но НЕ путает разные модели (ТЛШ vs ТШЛ — перестановка букв).
-    """
-    if not arshin_modification:
+
+def _single_field_score(file_type: str, arshin_value: Any) -> float:
+    """Сходство типа из файла с одним полем Аршина."""
+    if not arshin_value:
         return 0.0
-    mod_str = str(arshin_modification).strip().lower()
-    if mod_str in ('нет данных', 'нет модификации', 'нет', '-', 'none', ''):
+    if str(arshin_value).strip().lower() in EMPTY_VALUES:
         return 0.0
 
     fr = model_root(file_type)
-    ar = model_root(arshin_modification)
+    ar = model_root(arshin_value)
     if not fr or not ar:
         return 0.0
     if fr == ar:
@@ -95,6 +93,27 @@ def type_confirmation_score(file_type: str, arshin_modification: Any) -> float:
     if fr.startswith(ar) or ar.startswith(fr):
         return 90.0
     return fuzzy_ratio(fr, ar)
+
+
+def type_confirmation_score(
+    file_type: str,
+    arshin_modification: Any,
+    arshin_mitype: Any = None,
+) -> float:
+    """Насколько запись Аршина подтверждает тип прибора из файла.
+
+    Тип в Аршине может лежать в ЛЮБОМ из двух полей — единого правила нет:
+      * ЗНОЛ:      mi.mitype = None,       mi.modification = "модификация ЗНОЛ.06"
+      * ЕвроАЛЬФА: mi.mitype = "ЕвроАЛЬФА", mi.modification = "EA05"
+    Поэтому тип считается подтверждённым, если совпал хотя бы с одним из них.
+
+    Устойчиво к опечаткам метролога (ЗНОЛ-0.6-10 УЗ / ЗНОЛ-0.6-10-УЗ / ЗНОЛ.06),
+    но НЕ путает разные модели (ТЛШ vs ТШЛ — перестановка букв).
+    """
+    return max(
+        _single_field_score(file_type, arshin_modification),
+        _single_field_score(file_type, arshin_mitype),
+    )
 
 
 def ensure_date(val: Any) -> date | None:
@@ -208,7 +227,9 @@ def select_best_match(
     # 2. Скоринг: подтверждение типа + регион + пригодность + актуальность
     scored: list[tuple[float, float, dict]] = []
     for rec in candidates:
-        type_score = type_confirmation_score(file_type, rec.get("mi_modification"))
+        type_score = type_confirmation_score(
+            file_type, rec.get("mi_modification"), rec.get("mi_type")
+        )
         score = type_score
         score += region_match_score(owner_context, rec.get("org_title")) * 0.5
         if rec.get("applicability") is True:
@@ -235,7 +256,8 @@ def select_best_match(
             result_class=CheckResultClass.AMBIGUOUS_MULTIPLE_MATCHES,
             decision_reason=(
                 f"Тип в Аршине не подтверждает тип из файла "
-                f"(в файле «{file_type}», в Аршине «{best_record.get('mi_modification')}»). "
+                f"(в файле «{str(file_type).strip()}», "
+                f"в Аршине «{best_record.get('mi_type') or best_record.get('mi_modification')}»). "
                 f"Проверьте карточку вручную."
             ),
         )

@@ -17,6 +17,15 @@ from app.services.matcher import (
 logger = logging.getLogger(__name__)
 
 
+def fmt_date(value) -> str:
+    """Дата в привычном метрологу виде: 12.11.2030."""
+    if value is None:
+        return "—"
+    if isinstance(value, date):
+        return value.strftime("%d.%m.%Y")
+    return str(value)
+
+
 class Issue:
     def __init__(self, code: IssueCode, severity: JobIssueSeverity, message: str, cell_ref: str | None = None):
         self.code = code
@@ -78,9 +87,9 @@ def compare_device(
         for c in cands[:5]:
             url = c.get('card_url')
             mod = c.get('mi_modification') or '?'
-            vd = c.get('verification_date')
+            vd = ensure_date(c.get('verification_date'))
             if url:
-                links.append(f"{mod} (поверка {vd}): {url}")
+                links.append(f"{mod} (поверка {fmt_date(vd)}): {url}")
         detail = "; ".join(links) if links else "карточки недоступны"
         issues.append(Issue(
             code=IssueCode.MULTIPLE_MATCHES,
@@ -95,14 +104,16 @@ def compare_device(
     # реальные расхождения внутри семейства, а не опечатки в пунктуации.
     file_type_raw = device.get('type_raw') or device.get('type_norm')
     arshin_mod = selected.get('mi_modification')
-    if file_type_raw and arshin_mod:
-        conf = type_confirmation_score(file_type_raw, arshin_mod)
+    arshin_mitype = selected.get('mi_type')
+    if file_type_raw and (arshin_mod or arshin_mitype):
+        conf = type_confirmation_score(file_type_raw, arshin_mod, arshin_mitype)
         if conf < 75.0:
+            shown = arshin_mitype or arshin_mod
             status = JobItemStatus.MISMATCH
             issues.append(Issue(
                 code=IssueCode.TYPE_MISMATCH,
                 severity=JobIssueSeverity.RED,
-                message=f"Несовпадение типа: в файле «{str(file_type_raw).strip()}», в Аршине «{arshin_mod}»",
+                message=f"Несовпадение типа: в файле «{str(file_type_raw).strip()}», в Аршине «{shown}»",
                 cell_ref=device.get('cell_refs', {}).get('type'),
             ))
 
@@ -139,7 +150,7 @@ def compare_device(
                 issues.append(Issue(
                     code=IssueCode.VERIFICATION_DATE_MISMATCH,
                     severity=JobIssueSeverity.RED,
-                    message=f"Несовпадение даты поверки: в файле {file_vd_date}, в Аршине {arshin_vd_date}",
+                    message=f"Несовпадение даты поверки: в файле {fmt_date(file_vd_date)}, в Аршине {fmt_date(arshin_vd_date)}",
                     cell_ref=device.get('cell_refs', {}).get('verification_date'),
                 ))
 
@@ -163,7 +174,7 @@ def compare_device(
                 issues.append(Issue(
                     code=IssueCode.NEXT_VERIFICATION_DATE_MISMATCH,
                     severity=JobIssueSeverity.RED,
-                    message=f"Несовпадение даты след. поверки: в файле {file_nd_date}, в Аршине {arshin_valid_date}",
+                    message=f"Несовпадение даты след. поверки: в файле {fmt_date(file_nd_date)}, в Аршине {fmt_date(arshin_valid_date)}",
                     cell_ref=device.get('cell_refs', {}).get('next_date'),
                 ))
 
