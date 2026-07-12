@@ -7,7 +7,12 @@ from typing import Any
 
 from app.models.enums import IssueCode, JobIssueSeverity, JobItemStatus, CheckResultClass
 from app.excel.normalize import to_canonical_date, extract_vri_from_link
-from app.services.matcher import normalize_serial_for_gate, normalize_type_for_score, ensure_date
+from app.services.matcher import (
+    normalize_serial_for_gate,
+    normalize_type_for_score,
+    ensure_date,
+    type_confirmation_score,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,26 +68,41 @@ def compare_device(
             ))
         return ComparisonResult(status, issues)
 
-    # FIX: при AMBIGUOUS добавляем issue, но НЕ делаем ранний return —
-    # проверки дат и ссылок выполняются всегда.
+    # AMBIGUOUS: надёжно опознать прибор не удалось. Сравнивать поля не с чем —
+    # мы не знаем, какая из записей верная. Показываем метрологу все карточки,
+    # чтобы он выбрал нужную, но НЕ выдаём ложных расхождений.
     if match_result.result_class == CheckResultClass.AMBIGUOUS_MULTIPLE_MATCHES:
         status = JobItemStatus.AMBIGUOUS
+        cands = getattr(match_result, 'candidates', []) or []
+        links = []
+        for c in cands[:5]:
+            url = c.get('card_url')
+            mod = c.get('mi_modification') or '?'
+            vd = c.get('verification_date')
+            if url:
+                links.append(f"{mod} (поверка {vd}): {url}")
+        detail = "; ".join(links) if links else "карточки недоступны"
         issues.append(Issue(
             code=IssueCode.MULTIPLE_MATCHES,
             severity=JobIssueSeverity.ORANGE,
-            message=f"Неоднозначный выбор: {match_result.decision_reason}",
+            message=f"{match_result.decision_reason}. Кандидаты: {detail}",
             cell_ref=device.get('cell_refs', {}).get('serial'),
         ))
+        return ComparisonResult(status, issues, None)
 
-    file_type = device.get('type_norm')
-    arshin_type = normalize_type_for_score(selected.get('mi_type', ''))
-    if file_type and arshin_type:
-        if normalize_type_for_score(file_type) != arshin_type:
+    # Тип: сравниваем с mi.modification (mi.mitype в реестре почти всегда пустой).
+    # Матчер уже подтвердил семейство модели, поэтому здесь ловим только
+    # реальные расхождения внутри семейства, а не опечатки в пунктуации.
+    file_type_raw = device.get('type_raw') or device.get('type_norm')
+    arshin_mod = selected.get('mi_modification')
+    if file_type_raw and arshin_mod:
+        conf = type_confirmation_score(file_type_raw, arshin_mod)
+        if conf < 75.0:
             status = JobItemStatus.MISMATCH
             issues.append(Issue(
                 code=IssueCode.TYPE_MISMATCH,
                 severity=JobIssueSeverity.RED,
-                message=f"Несовпадение типа: в файле {file_type}, в Аршине {arshin_type}",
+                message=f"Несовпадение типа: в файле «{str(file_type_raw).strip()}», в Аршине «{arshin_mod}»",
                 cell_ref=device.get('cell_refs', {}).get('type'),
             ))
 

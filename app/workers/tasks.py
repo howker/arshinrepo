@@ -29,6 +29,7 @@ from app.excel.parser import TemplateDrivenParser, TemplateNotMatchedError
 from app.excel.annotator import ExcelAnnotator
 from app.clients.arshin import arshin_client, ArshinRateLimitError, ArshinUpstreamUnavailableError
 from app.services.matcher import select_best_match, ensure_date
+from app.services.mitnumber_registry import mitnumber_resolver
 from app.services.comparator import compare_device
 from app.services.report import build_report, save_report_to_json
 
@@ -100,23 +101,45 @@ def process_excel_job(job_id_str: str) -> str:
             try:
                 logger.info("Processing device %d/%d: %s", idx, len(devices), device.get('serial_norm'))
 
-                # 3a. Запрос к Аршину
+                # 3a. Определяем семейство госреестра по типу из файла.
+                # Без этого короткий серийник даёт тысячи чужих приборов,
+                # и нужный может вообще не попасть в выдачу.
                 serial_norm = device.get('serial_norm')
                 type_norm = device.get('type_norm')
+                type_raw = device.get('type_raw')
+
+                mitnumbers = None
+                try:
+                    mitnumbers, fam_info = mitnumber_resolver.resolve(db, type_raw or type_norm)
+                    if mitnumbers:
+                        logger.info(
+                            "Device %s: family %s -> %s", serial_norm, fam_info, mitnumbers
+                        )
+                    else:
+                        logger.warning(
+                            "Device %s: family not resolved (%s)", serial_norm, fam_info
+                        )
+                except Exception as e:
+                    logger.warning("Mitnumber resolve failed for %s: %s", serial_norm, e)
+
+                # 3b. Живой запрос к Аршину (с фильтром по семейству, если он есть)
                 arshin_result = arshin_client.search_by_serial(
                     serial_norm=serial_norm,
                     type_norm=type_norm,
                     job_id=job.id,
+                    mitnumbers=mitnumbers,
                 )
 
-                # 3b. Матчинг
+                # 3c. Матчинг по строгому контракту
                 match_result = select_best_match(
                     item_serial_norm=serial_norm,
                     item_type_norm=type_norm,
                     arshin_result=arshin_result,
+                    item_type_raw=type_raw,
+                    owner_context=device.get('context', {}),
                 )
 
-                # 3c. Сравнение
+                # 3d. Сравнение
                 comp_result = compare_device(device, match_result)
 
                 # 3d. Сохраняем JobItem
