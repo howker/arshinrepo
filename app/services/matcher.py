@@ -109,6 +109,14 @@ def ensure_date(val: Any) -> date | None:
         val = val.strip()
         if not val or val == "INVALID":
             return None
+        # ISO 8601 из Аршина: 2023-06-12T00:00:00Z
+        m = re.match(r"^(\d{4})-(\d{2})-(\d{2})T", val)
+        if m:
+            y, mo, d = map(int, m.groups())
+            try:
+                return date(y, mo, d)
+            except ValueError:
+                return None
         for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
             try:
                 return datetime.strptime(val, fmt).date()
