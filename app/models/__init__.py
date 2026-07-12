@@ -7,6 +7,7 @@ from app.models.file_object import FileObject
 from app.models.template_profile import TemplateProfile
 from app.models.audit_log import AuditLog
 from app.models.arshin_audit import ArshinAudit
+from app.models.mitnumber_registry import MitnumberRegistry
 
 __all__ = [
     "User",
@@ -18,4 +19,5 @@ __all__ = [
     "TemplateProfile",
     "AuditLog",
     "ArshinAudit",
+    "MitnumberRegistry",
 ]

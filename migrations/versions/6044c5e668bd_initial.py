@@ -1,8 +1,8 @@
-"""clean baseline
+"""initial
 
-Revision ID: 56aa41542075
+Revision ID: 6044c5e668bd
 Revises: 
-Create Date: 2026-06-28 16:35:59.365618
+Create Date: 2026-07-01 07:51:13.403369
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = '56aa41542075'
+revision: str = '6044c5e668bd'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
