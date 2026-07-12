@@ -14,6 +14,7 @@ from app.models.enums import FileObjectType
 from app.models.user import User
 from app.schemas.jobs import JobIssueResponse, JobResponse, RunJobResponse
 from app.services.jobs import (
+    cancel_job_for_user,
     download_job_file_for_user,
     get_job_for_user,
     get_job_issues_for_user,
@@ -83,6 +84,17 @@ def run_job(
 ):
     """Запустить обработку job (ТЗ §13)."""
     job = run_job_for_user(db, current_user, job_id)
+    return RunJobResponse(job_id=job.id, status=job.status)
+
+
+@router.post("/{job_id}/cancel", response_model=RunJobResponse)
+def cancel_job(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Отмена job (ТЗ §13, кооперативная отмена)."""
+    job = cancel_job_for_user(db, current_user, job_id)
     return RunJobResponse(job_id=job.id, status=job.status)
 
 

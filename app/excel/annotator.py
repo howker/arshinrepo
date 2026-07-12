@@ -1,5 +1,6 @@
 """Аннотация Excel: заливка, комментарии, ссылки (ТЗ раздел 12)."""
 from __future__ import annotations
+from pathlib import Path
 
 import logging
 from copy import copy
@@ -65,7 +66,7 @@ class ExcelAnnotator:
 
     def _get_anchor_cell(self, sheet, cell_ref: str):
         """Находит верхнюю левую ячейку merged-диапазона (ТЗ 12.4)."""
-        from openpyxl.utils import coordinate_from_string, column_index_from_string
+        from openpyxl.utils.cell import coordinate_from_string, column_index_from_string
         col_letter, row = coordinate_from_string(cell_ref)
         col = column_index_from_string(col_letter)
 
@@ -98,14 +99,14 @@ class ExcelAnnotator:
             # Заливка
             if color:
                 cell.fill = PatternFill(fill_type="solid", fgColor=color)
-            # Комментарий
+            # Комментарий (с автоподбором размера окна, чтобы текст был виден целиком)
             message = issue.get('message', '')
             if message:
                 if cell.comment:
-                    existing = cell.comment.text
-                    cell.comment = Comment(f"{existing}\n{message}", "Arshin Checker")
+                    text = f"{cell.comment.text}\n\n{message}"
                 else:
-                    cell.comment = Comment(message, "Arshin Checker")
+                    text = message
+                cell.comment = self._make_comment(text)
 
         # 2. Ссылка на Аршин в столбце arshin_link
         link_col = cols.get('arshin_link')
@@ -117,6 +118,26 @@ class ExcelAnnotator:
                 cell.value = selected_url
             elif link_overwrite_policy == 'append' and cell.value:
                 cell.value = f"{cell.value}; {selected_url}"
+
+    def _make_comment(self, text: str) -> Comment:
+        """Комментарий с размером окна под объём текста.
+
+        openpyxl по умолчанию делает крошечный квадратик, в котором длинное
+        сообщение обрезается, и метрологу приходится растягивать его вручную.
+        Считаем размер по числу строк с учётом переносов.
+        """
+        CHARS_PER_LINE = 45
+        lines = 0
+        for para in text.split("\n"):
+            lines += max(1, -(-len(para) // CHARS_PER_LINE))  # ceil
+
+        width = 380
+        height = max(90, min(20 * lines + 30, 600))
+
+        comment = Comment(text, "Проверка по ФГИС «Аршин»")
+        comment.width = width
+        comment.height = height
+        return comment
 
     def _find_group_config(self, device_kind: str):
         for group in self.config.get('device_groups', []):

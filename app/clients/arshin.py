@@ -12,6 +12,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from app.core.config import get_settings
 from app.models.enums import CheckResultClass
+from app.excel.normalize import to_canonical_date
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,26 @@ class ArshinClient:
         fl = ",".join(fields)
         return f"{self.xcdb_url}?q=*&fq=mi.number:\"{serial}\"&fl={fl}&rows={self.rows}&start=0"
 
+    def _build_xcdb_url_with_family(
+        self, serial: str, fields: list[str], mitnumbers: list[str]
+    ) -> str:
+        """URL с фильтром по номерам госреестра (ТЗ 10.1, сужение выдачи).
+
+        Без этого фильтра короткий серийник (например "6590") даёт 1600+ записей
+        совершенно разных приборов, и нужный прибор может вообще не попасть
+        в первые rows=100. С фильтром выдача схлопывается до единиц.
+        """
+        from urllib.parse import quote
+        fl = ",".join(fields)
+        mitn_or = " OR ".join(f'"{m}"' for m in mitnumbers)
+        fq_family = quote(f"mi.mitnumber:({mitn_or})")
+        return (
+            f"{self.xcdb_url}?q=*"
+            f"&fq=mi.number:\"{serial}\""
+            f"&fq={fq_family}"
+            f"&fl={fl}&rows={self.rows}&start=0"
+        )
+
     def _build_eapi_url(self, serial: str) -> str:
         return f"{self.eapi_url}?search={serial}&rows={self.rows}"
 
@@ -120,6 +141,7 @@ class ArshinClient:
             field_map = {
                 "vri_id": "vri_id",
                 "mi_number": "mi.number",
+                "mi_mitnumber": "mi.mitnumber",
                 "mi_type": "mi.mitype",
                 "mi_title": "mi.mititle",
                 "mi_modification": "mi.modification",
@@ -147,6 +169,8 @@ class ArshinClient:
                 continue
             if isinstance(v, str):
                 v = v.strip()
+            if k in {"verification_date", "valid_date"}:
+                v = to_canonical_date(v)
             result[k] = v
         if result.get("vri_id"):
             result["card_url"] = f"{self.card_url}/{result['vri_id']}"
@@ -194,17 +218,25 @@ class ArshinClient:
         type_norm: str | None = None,
         job_id: UUID | None = None,
         job_item_id: UUID | None = None,
+        mitnumbers: list[str] | None = None,
     ) -> ArshinSearchResult:
-        """Поиск по точному серийнику (ТЗ 9.1)."""
+        """Поиск по точному серийнику (ТЗ 9.1).
+
+        Если передан mitnumbers (номера госреестра семейства модели), выдача
+        дополнительно сужается фильтром по ним. Это критично: короткий серийник
+        без такого фильтра возвращает тысячи записей чужих приборов, и нужный
+        прибор может не попасть в rows=100 вообще.
+        """
         # Проверка кэша (ТЗ 9.4)
-        cache_key = f"{serial_norm}:{type_norm or ''}"
+        fam_key = ",".join(sorted(mitnumbers)) if mitnumbers else ""
+        cache_key = f"{serial_norm}:{type_norm or ''}:{fam_key}"
         if cache_key in self._cache:
             logger.debug("Cache hit for %s", cache_key)
             return self._cache[cache_key]
 
         mode = self.api_mode
         fields = [
-            "vri_id", "mi.number", "mi.mitype", "mi.mititle",
+            "vri_id", "mi.number", "mi.mitnumber", "mi.mitype", "mi.mititle",
             "mi.modification", "verification_date", "valid_date",
             "applicability", "org_title"
         ] if mode == "xcdb" else [
@@ -214,7 +246,10 @@ class ArshinClient:
         ]
 
         if mode == "xcdb":
-            url = self._build_xcdb_url(serial_norm, fields)
+            if mitnumbers:
+                url = self._build_xcdb_url_with_family(serial_norm, fields, mitnumbers)
+            else:
+                url = self._build_xcdb_url(serial_norm, fields)
             parse_func = self._parse_xcdb_response
         else:
             url = self._build_eapi_url(serial_norm)

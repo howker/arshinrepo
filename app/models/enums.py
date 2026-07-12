@@ -16,6 +16,7 @@ class JobStatus(StrEnum):
     COMPLETED_WITH_ISSUES = "completed_with_issues"
     FAILED = "failed"
     FAILED_SOURCE_UNAVAILABLE = "failed_source_unavailable"
+    CANCELLED = "cancelled"
 
 
 class FileObjectType(StrEnum):

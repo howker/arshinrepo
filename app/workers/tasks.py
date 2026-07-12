@@ -13,11 +13,13 @@ from app.core.config import get_settings
 from app.core.storage import storage
 from app.models.job import Job
 from app.models.job_item import JobItem
+from app.models.file_object import FileObject
 from app.models.job_item_check import JobItemCheck
 from app.models.job_issue import JobIssue
 from app.models.arshin_audit import ArshinAudit
 from app.models.enums import (
     JobStatus,
+    FileObjectType,
     JobItemStatus,
     JobIssueSeverity,
     IssueCode,
@@ -26,7 +28,8 @@ from app.models.enums import (
 from app.excel.parser import TemplateDrivenParser, TemplateNotMatchedError
 from app.excel.annotator import ExcelAnnotator
 from app.clients.arshin import arshin_client, ArshinRateLimitError, ArshinUpstreamUnavailableError
-from app.services.matcher import select_best_match
+from app.services.matcher import select_best_match, ensure_date
+from app.services.mitnumber_registry import mitnumber_resolver
 from app.services.comparator import compare_device
 from app.services.report import build_report, save_report_to_json
 
@@ -37,6 +40,7 @@ logger = logging.getLogger(__name__)
 def process_excel_job(job_id_str: str) -> str:
     """Основная задача обработки Excel (последовательный пайплайн)."""
     db = SessionLocal()
+    settings = get_settings()
     job = db.query(Job).filter(Job.id == job_id_str).first()
     if not job:
         logger.error("Job %s not found", job_id_str)
@@ -86,26 +90,56 @@ def process_excel_job(job_id_str: str) -> str:
         all_results = []
 
         for idx, device in enumerate(devices, 1):
+            db.refresh(job)
+            if job.status == JobStatus.CANCELLED:
+                logger.info("Job %s cancelled before device %d/%d", job_id_str, idx, len(devices))
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                db.close()
+                return f"Cancelled after {idx - 1} of {len(devices)} devices"
+
             try:
                 logger.info("Processing device %d/%d: %s", idx, len(devices), device.get('serial_norm'))
 
-                # 3a. Запрос к Аршину
+                # 3a. Определяем семейство госреестра по типу из файла.
+                # Без этого короткий серийник даёт тысячи чужих приборов,
+                # и нужный может вообще не попасть в выдачу.
                 serial_norm = device.get('serial_norm')
                 type_norm = device.get('type_norm')
+                type_raw = device.get('type_raw')
+
+                mitnumbers = None
+                try:
+                    mitnumbers, fam_info = mitnumber_resolver.resolve(db, type_raw or type_norm)
+                    if mitnumbers:
+                        logger.info(
+                            "Device %s: family %s -> %s", serial_norm, fam_info, mitnumbers
+                        )
+                    else:
+                        logger.warning(
+                            "Device %s: family not resolved (%s)", serial_norm, fam_info
+                        )
+                except Exception as e:
+                    logger.warning("Mitnumber resolve failed for %s: %s", serial_norm, e)
+
+                # 3b. Живой запрос к Аршину (с фильтром по семейству, если он есть)
                 arshin_result = arshin_client.search_by_serial(
                     serial_norm=serial_norm,
                     type_norm=type_norm,
                     job_id=job.id,
+                    mitnumbers=mitnumbers,
                 )
 
-                # 3b. Матчинг
+                # 3c. Матчинг по строгому контракту
                 match_result = select_best_match(
                     item_serial_norm=serial_norm,
                     item_type_norm=type_norm,
                     arshin_result=arshin_result,
+                    item_type_raw=type_raw,
+                    owner_context=device.get('context', {}),
                 )
 
-                # 3c. Сравнение
+                # 3d. Сравнение
                 comp_result = compare_device(device, match_result)
 
                 # 3d. Сохраняем JobItem
@@ -142,13 +176,13 @@ def process_excel_job(job_id_str: str) -> str:
                 job_check = JobItemCheck(
                     job_item_id=job_item.id,
                     arshin_found=bool(selected),
-                    selected_vri_id=selected.get('vri_id'),
-                    selected_url=selected.get('card_url'),
-                    arshin_type=selected.get('mi_type'),
-                    arshin_serial=selected.get('mi_number'),
-                    arshin_verification_date=selected.get('verification_date'),
-                    arshin_valid_date=selected.get('valid_date'),
-                    arshin_applicability=selected.get('applicability'),
+                    selected_vri_id=selected.get("vri_id"),
+                    selected_url=selected.get("card_url"),
+                    arshin_type=selected.get("mi_type"),
+                    arshin_serial=selected.get("mi_number"),
+                    arshin_verification_date=ensure_date(selected.get("verification_date")),
+                    arshin_valid_date=ensure_date(selected.get("valid_date")),
+                    arshin_applicability=selected.get("applicability"),
                     candidates_count=match_result.candidates_count,
                     decision_reason=match_result.decision_reason,
                     result_class=match_result.result_class,
@@ -173,7 +207,7 @@ def process_excel_job(job_id_str: str) -> str:
                     job_id=job.id,
                     job_item_id=job_item.id,
                     attempt_no=arshin_result.attempts,
-                    endpoint_mode=settings.arshin_api_mode,
+                    endpoint_mode=get_settings().arshin_api_mode,
                     request_url=arshin_result.request_url or "",
                     request_params_json=arshin_result.request_params,
                     http_status=arshin_result.http_status,
@@ -268,6 +302,16 @@ def process_excel_job(job_id_str: str) -> str:
         )
 
         job.result_file_path = result_relative_path
+
+        # Регистрируем результат как FileObject, чтобы его можно было скачать
+        result_size = full_result_path.stat().st_size
+        result_file_obj = FileObject(
+            job_id=job.id,
+            kind=FileObjectType.RESULT,
+            path=result_relative_path,
+            size_bytes=result_size,
+        )
+        db.add(result_file_obj)
 
         # 5. Генерация отчёта
         report = build_report(

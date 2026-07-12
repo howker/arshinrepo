@@ -97,6 +97,18 @@ def to_canonical_date(value: Any) -> date | None | str:
     # Строковые форматы
     if isinstance(value, str):
         s = value.strip()
+
+        # ISO 8601 из Аршина: "2023-06-12T00:00:00Z", "2017-03-31T03:00:00Z".
+        # Берём только дату; время/таймзону игнорируем (Аршин отдаёт местное
+        # время поверки, смещение не несёт смысла для сравнения по дате).
+        m_iso = re.match(r'^(\d{4})-(\d{2})-(\d{2})T', s)
+        if m_iso:
+            y, mo, d = map(int, m_iso.groups())
+            try:
+                return date(y, mo, d)
+            except ValueError:
+                return "INVALID"
+
         # Заглушка 31.12.1899
         if re.match(r'^31\.?12\.?1899$|^31121899$', s):
             return "INVALID"
