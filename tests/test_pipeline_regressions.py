@@ -276,3 +276,60 @@ def test_worker_does_not_use_refresh():
         "db.refresh(job) затирает несохранённый прогресс — "
         "проверяйте отмену точечным запросом статуса"
     )
+
+
+class TestCancellation:
+    """Отмена должна держаться, а не перетираться прогрессом воркера.
+
+    Баг: воркер и API писали в job из разных сессий. API ставил CANCELLED,
+    воркер тут же коммитил свой прогресс и возвращал статус в PROCESSING —
+    выглядело так, будто проверка «запустилась заново» после остановки.
+    """
+
+    def test_api_never_touches_progress_fields(self):
+        """run_job_for_user не должен трогать total_items — их пишет воркер."""
+        from pathlib import Path
+        src = Path("app/services/jobs.py").read_text(encoding="utf-8")
+        run_fn = src.split("def run_job_for_user")[1].split("\ndef ")[0]
+
+        assert "job.total_items = total" not in run_fn, (
+            "API перетирает total_items уже работающей задачи"
+        )
+        assert "db.refresh(job)" not in run_fn, (
+            "refresh в API затирает прогресс, записанный воркером"
+        )
+
+    def test_queue_priority_does_not_parse_file(self):
+        """Приоритет считается по размеру файла, а не полным парсингом.
+
+        Парсинг 2000+ приборов занимал ~40 секунд прямо в HTTP-запросе,
+        и за это время воркер успевал начать работу — статусы конфликтовали.
+        """
+        from pathlib import Path
+        src = Path("app/services/jobs.py").read_text(encoding="utf-8")
+        run_fn = src.split("def run_job_for_user")[1].split("\ndef ")[0]
+
+        assert "count_devices_in_file" not in run_fn, (
+            "Полный парсинг в HTTP-запросе блокирует ответ и провоцирует гонку"
+        )
+
+    def test_priority_by_file_size(self):
+        """Мелкий файл получает высокий приоритет, крупный — низкий."""
+        import os
+        import tempfile
+        from app.services.queue import priority_for_file
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"x" * 30_000)          # ~30 КБ ≈ 20 приборов
+            small = f.name
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"x" * 800_000)         # ~800 КБ ≈ 2000+ приборов
+            large = f.name
+
+        try:
+            assert priority_for_file(small) < priority_for_file(large), (
+                "Короткая проверка обязана обгонять длинную"
+            )
+        finally:
+            os.unlink(small)
+            os.unlink(large)

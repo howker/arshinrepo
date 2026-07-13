@@ -118,29 +118,28 @@ def run_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
         )
 
     # Приоритет по размеру файла: короткие проверки не должны ждать
-    # часами за чужим большим файлом (защита времени метролога).
+    # часами за чужим большим файлом. Считаем по байтам, а не парсингом —
+    # парсинг 2000+ приборов занял бы ~40 секунд прямо в HTTP-запросе.
     from datetime import datetime, timezone
     from app.core.config import get_settings
-    from app.services.queue import count_devices_in_file, priority_for_items
+    from app.services.queue import priority_for_file
 
     settings = get_settings()
     full_path = settings.storage_root / job.source_file_path
-    total = count_devices_in_file(str(full_path), settings.default_template_code)
-    priority = priority_for_items(total)
+    priority = priority_for_file(str(full_path))
 
+    # total_items и прогресс выставляет ТОЛЬКО воркер: если их трогать здесь,
+    # запись API перетрёт состояние уже начавшейся обработки.
     job.status = JobStatus.QUEUED
     job.error_message = None
     job.priority = priority
     job.queued_at = datetime.now(timezone.utc)
-    if total:
-        job.total_items = total
+    job.processed_items = 0
+    job.current_item_label = None
     db.add(job)
     db.commit()
-    db.refresh(job)
 
-    logger.info(
-        "Job %s поставлен в очередь: приборов=%s, приоритет=%s", job.id, total, priority
-    )
+    logger.info("Job %s поставлен в очередь, приоритет=%s", job.id, priority)
     process_excel_job.apply_async(args=[str(job.id)], priority=priority)
     return job
 
