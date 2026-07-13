@@ -101,10 +101,26 @@ def process_excel_job(job_id_str: str) -> str:
         all_results = []
 
         for idx, device in enumerate(devices, 1):
-            db.refresh(job)
-            if job.status == JobStatus.CANCELLED:
+            # Проверяем отмену ТОЧЕЧНЫМ запросом, а не db.refresh(job):
+            # refresh перечитывает весь объект и затирает несохранённые поля
+            # (status=PROCESSING, processed_items), из-за чего прогресс
+            # обнулялся, а статус откатывался обратно в «в очереди».
+            with db.no_autoflush:
+                current_status = (
+                    db.query(Job.status)
+                    .filter(Job.id == job.id)
+                    .scalar()
+                )
+            if current_status == JobStatus.CANCELLED:
                 logger.info("Job %s cancelled before device %d/%d", job_id_str, idx, len(devices))
+                job.status = JobStatus.CANCELLED
                 job.finished_at = datetime.now(timezone.utc)
+                job.current_item_label = None
+                log_event(
+                    db, job.id,
+                    f"Проверка прервана пользователем. Обработано приборов: {idx - 1} из {len(devices)}",
+                    level="warning",
+                )
                 db.commit()
                 db.close()
                 return f"Cancelled after {idx - 1} of {len(devices)} devices"
