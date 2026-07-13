@@ -61,6 +61,25 @@ def _is_retryable_error(exc: BaseException) -> bool:
     return False
 
 
+# Пауза после 429 (Too Many Requests). Аршин — общедоступный государственный
+# ресурс с ограниченной пропускной способностью; при троттлинге корректнее
+# подождать подольше, чем продолжать давить запросами.
+RATE_LIMIT_COOLDOWN_SECONDS = 60.0
+MAX_COOLDOWN_SECONDS = 300.0
+
+
+def _cooldown_after_rate_limit(response: httpx.Response | None) -> float:
+    """Сколько ждать после 429: уважаем Retry-After, если он есть."""
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), MAX_COOLDOWN_SECONDS)
+            except ValueError:
+                pass
+    return RATE_LIMIT_COOLDOWN_SECONDS
+
+
 class ArshinClient:
     """Адаптер к API Аршина с двумя режимами (xcdb/eapi), троттлингом и аудитом."""
 
@@ -202,6 +221,23 @@ class ArshinClient:
             resp.raise_for_status()
             result["data"] = resp.json()
             return result
+        except httpx.HTTPStatusError as e:
+            elapsed = (time.time() - start_time) * 1000
+            result["response_time_ms"] = elapsed
+            result["transport_error"] = str(e)
+            if e.response.status_code == 429:
+                cooldown = _cooldown_after_rate_limit(e.response)
+                logger.warning(
+                    "Arshin rate limit (429). Пауза %.0f с перед повтором.",
+                    cooldown, extra={"serial": serial},
+                )
+                time.sleep(cooldown)
+            else:
+                logger.warning(
+                    "Arshin request failed (attempt %s): %s",
+                    attempt, str(e), extra={"serial": serial, "url": url}
+                )
+            raise
         except Exception as e:
             elapsed = (time.time() - start_time) * 1000
             result["response_time_ms"] = elapsed

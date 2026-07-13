@@ -12,7 +12,13 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.models.enums import FileObjectType
 from app.models.user import User
-from app.schemas.jobs import JobIssueResponse, JobResponse, RunJobResponse
+from app.schemas.jobs import (
+    JobIssueResponse,
+    JobResponse,
+    RunJobResponse,
+    JobProgressResponse,
+)
+from app.services.progress import build_progress
 from app.services.jobs import (
     cancel_job_for_user,
     download_job_file_for_user,
@@ -96,6 +102,20 @@ def cancel_job(
     """Отмена job (ТЗ §13, кооперативная отмена)."""
     job = cancel_job_for_user(db, current_user, job_id)
     return RunJobResponse(job_id=job.id, status=job.status)
+
+
+@router.get("/{job_id}/progress", response_model=JobProgressResponse)
+def get_job_progress(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Прогресс обработки: счётчики, позиция в очереди, оценка времени, лог событий.
+
+    Данные берутся только из нашей БД — запросов к Аршину этот endpoint не делает.
+    """
+    job = get_job_for_user(db, current_user, job_id)
+    return build_progress(db, job)
 
 
 @router.get("/{job_id}/issues", response_model=list[JobIssueResponse])

@@ -32,13 +32,13 @@ class TestArshinClient:
         assert "q=*" in url
         assert "fq=mi.number:\"12345\"" in url
         assert "fl=vri_id,mi.number" in url
-        assert "rows=100" in url
+        assert f"rows={get_settings().arshin_rows}" in url
 
     def test_build_eapi_url(self):
         client = ArshinClient()
         url = client._build_eapi_url("12345")
         assert "search=12345" in url
-        assert "rows=100" in url
+        assert f"rows={get_settings().arshin_rows}" in url
 
     def test_parse_xcdb_response(self):
         client = ArshinClient()

@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from app.core.database import getdb
 from app.core.security import TokenPayloadError, decode_access_token
 from app.models import User
-from app.schemas.auth import LoginRequest, MeResponse, TokenResponse
-from app.services.auth import AuthService, AuthenticationError
+from app.schemas.auth import LoginRequest, MeResponse, RegisterRequest, TokenResponse
+from app.services.auth import AuthService, AuthenticationError, RegistrationError
 
 router = APIRouter(tags=["auth"])
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -43,6 +43,20 @@ def get_current_user(
         )
 
     return user
+
+
+@router.post("/auth/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+def register(payload: RegisterRequest, db: Session = Depends(getdb)) -> TokenResponse:
+    """Саморегистрация. После регистрации пользователь сразу авторизован."""
+    service = AuthService(db)
+
+    try:
+        user = service.register_user(payload.email, payload.password, payload.full_name)
+    except RegistrationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    token = service.create_token_for_user(user)
+    return TokenResponse(access_token=token)
 
 
 @router.post("/auth/login", response_model=TokenResponse)

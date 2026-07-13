@@ -8,6 +8,7 @@ from app.models.template_profile import TemplateProfile
 from app.models.audit_log import AuditLog
 from app.models.arshin_audit import ArshinAudit
 from app.models.mitnumber_registry import MitnumberRegistry
+from app.models.job_event import JobEvent
 
 __all__ = [
     "User",
@@ -20,4 +21,5 @@ __all__ = [
     "AuditLog",
     "ArshinAudit",
     "MitnumberRegistry",
+    "JobEvent",
 ]

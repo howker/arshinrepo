@@ -45,8 +45,22 @@ class Job(BaseModel):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # --- Прогресс обработки (для live-отображения в UI) ---
+    # Сколько приборов уже обработано (обновляется по ходу работы воркера)
+    processed_items: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Какой прибор обрабатывается прямо сейчас (для лога: "ЗНОЛ-0.6-10 УЗ № 6590")
+    current_item_label: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    # --- Приоритет в очереди ---
+    # Короткие файлы обрабатываются раньше длинных, чтобы проверка на 20 приборов
+    # не ждала три часа за чужим файлом на 2000. Защита от голодания —
+    # приоритет растёт со временем ожидания (см. services/queue.py).
+    priority: Mapped[int] = mapped_column(Integer, default=5, nullable=False, index=True)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Отношения
     items = relationship("JobItem", back_populates="job", cascade="all, delete-orphan")
     issues = relationship("JobIssue", back_populates="job", cascade="all, delete-orphan")
+    events = relationship("JobEvent", back_populates="job", cascade="all, delete-orphan")
     files = relationship("FileObject", back_populates="job", cascade="all, delete-orphan")
     user = relationship("User", back_populates="jobs")

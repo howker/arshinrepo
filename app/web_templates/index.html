@@ -1,94 +1,125 @@
 {% extends "base.html" %}
-
-{% block title %}Главная - Arshin Checker{% endblock %}
+{% block title %}Мои проверки — Сверка с Аршином{% endblock %}
 
 {% block content %}
-<div class="header-actions">
-    <h1>Мои проверки</h1>
-    <button id="upload-btn" class="btn-primary">Загрузить файл</button>
+<h1>Мои проверки</h1>
+<p class="subtitle">Загрузите ведомость СИ — сервис сверит каждый прибор с реестром Аршина.</p>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Новая проверка</h2>
+    <span class="hint">Формат .xlsx</span>
+  </div>
+  <div id="upload-msg"></div>
+  <div class="row">
+    <input type="file" id="file" accept=".xlsx" style="flex:1 1 280px;">
+    <button id="upload-btn">Загрузить и проверить</button>
+  </div>
 </div>
 
-<div id="upload-section" style="display:none;" class="upload-section">
-    <form id="upload-form" enctype="multipart/form-data">
-        <input type="file" id="file-input" name="file" accept=".xlsx" required>
-        <button type="submit">Отправить</button>
-    </form>
-    <div id="upload-status"></div>
-</div>
-
-<div id="jobs-list">
-    <p>Загрузка...</p>
+<div class="panel">
+  <div class="panel-head">
+    <h2>История</h2>
+    <span class="hint" id="jobs-hint"></span>
+  </div>
+  <div id="jobs">
+    <div class="empty">Загружаем…</div>
+  </div>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
-console.log("🔵 index.html загружен");
-const token = localStorage.getItem('token');
-console.log("🔵 Токен из localStorage:", token);
+if (!token) window.location.href = '/login';
 
-if (!token) {
-    console.log("🔴 Токен отсутствует, редирект на логин");
-    window.location.href = '/login';
-} else {
-    console.log("✅ Токен есть, загружаем данные");
-    // Загрузка списка заданий
-    fetch('/api/jobs', {
-        headers: {'Authorization': `Bearer ${token}`}
-    })
-    .then(res => {
-        if (!res.ok) throw new Error('Ошибка загрузки');
-        return res.json();
-    })
-    .then(jobs => {
-        console.log("📦 Jobs:", jobs);
-        const list = document.getElementById('jobs-list');
-        if (jobs.length === 0) {
-            list.innerHTML = '<p>Нет заданий</p>';
-        } else {
-            let html = '<ul>';
-            jobs.forEach(job => {
-                html += `<li><a href="/jobs/${job.id}">${job.source_filename} (${job.status})</a></li>`;
-            });
-            html += '</ul>';
-            list.innerHTML = html;
-        }
-    })
-    .catch(err => {
-        console.error("❌ Ошибка загрузки заданий:", err);
-        document.getElementById('jobs-list').innerHTML = '<p style="color:red;">Ошибка загрузки</p>';
-    });
+const STATUS = {
+  uploaded:                 ['Загружен',            'idle'],
+  queued:                   ['В очереди',           'idle'],
+  processing:               ['Проверяется',         'warn'],
+  completed:                ['Расхождений нет',     'ok'],
+  completed_with_issues:    ['Есть замечания',      'alert'],
+  failed:                   ['Ошибка',              'alert'],
+  failed_source_unavailable:['Аршин недоступен',    'alert'],
+  cancelled:                ['Прервана',            'idle'],
+};
+
+async function loadJobs() {
+  try {
+    const res = await api('/api/jobs');
+    const jobs = await res.json();
+    const box = document.getElementById('jobs');
+
+    if (!jobs.length) {
+      box.innerHTML = '<div class="empty">Проверок пока нет. Загрузите первую ведомость.</div>';
+      document.getElementById('jobs-hint').textContent = '';
+      return;
+    }
+    document.getElementById('jobs-hint').textContent = jobs.length + ' всего';
+
+    let html = '<table><thead><tr>'
+      + '<th>Файл</th><th>Загружен</th><th>Приборов</th>'
+      + '<th>Совпало</th><th>Расхождений</th><th>Проверить</th><th>Статус</th>'
+      + '</tr></thead><tbody>';
+
+    for (const j of jobs) {
+      const [label, cls] = STATUS[j.status] || [j.status, 'idle'];
+      const attention = (j.mismatch_count || 0) + (j.ambiguous_count || 0) + (j.source_uncertain_count || 0);
+      html += '<tr>'
+        + '<td><a href="/jobs/' + j.id + '">' + escapeHtml(j.source_filename) + '</a></td>'
+        + '<td class="num">' + ruDateTime(j.created_at) + '</td>'
+        + '<td class="num">' + (j.total_items || 0) + '</td>'
+        + '<td class="num">' + (j.matched_count || 0) + '</td>'
+        + '<td class="num">' + (j.mismatch_count || 0) + '</td>'
+        + '<td class="num">' + (attention - (j.mismatch_count || 0)) + '</td>'
+        + '<td><span class="tag ' + cls + '">' + label + '</span></td>'
+        + '</tr>';
+    }
+    box.innerHTML = html + '</tbody></table>';
+  } catch (e) {
+    document.getElementById('jobs').innerHTML =
+      '<div class="notice error">Не удалось загрузить список. Обновите страницу.</div>';
+  }
 }
 
-// Загрузка файла
-document.getElementById('upload-btn').addEventListener('click', () => {
-    document.getElementById('upload-section').style.display = 'block';
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s ?? '';
+  return d.innerHTML;
+}
+
+document.getElementById('upload-btn').addEventListener('click', async () => {
+  const input = document.getElementById('file');
+  const msg = document.getElementById('upload-msg');
+  const btn = document.getElementById('upload-btn');
+
+  if (!input.files.length) {
+    msg.innerHTML = '<div class="notice error">Выберите файл .xlsx</div>';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Загружаем…';
+  msg.innerHTML = '';
+
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+
+  try {
+    const res = await api('/api/jobs/upload', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error('upload failed');
+    const job = await res.json();
+
+    btn.textContent = 'Ставим в очередь…';
+    await api('/api/jobs/' + job.id + '/run', { method: 'POST' });
+    window.location.href = '/jobs/' + job.id;
+  } catch (e) {
+    msg.innerHTML = '<div class="notice error">Не удалось загрузить файл. Проверьте формат и повторите.</div>';
+    btn.disabled = false;
+    btn.textContent = 'Загрузить и проверить';
+  }
 });
 
-document.getElementById('upload-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const form = e.target;
-    const formData = new FormData(form);
-    const statusDiv = document.getElementById('upload-status');
-    statusDiv.textContent = 'Загрузка...';
-
-    try {
-        const resp = await fetch('/api/jobs/upload', {
-            method: 'POST',
-            headers: {'Authorization': `Bearer ${token}`},
-            body: formData
-        });
-        const result = await resp.json();
-        if (resp.ok) {
-            statusDiv.textContent = '✅ Файл загружен!';
-            setTimeout(() => window.location.reload(), 1500);
-        } else {
-            statusDiv.textContent = '❌ Ошибка: ' + (result.detail || 'неизвестная');
-        }
-    } catch (err) {
-        statusDiv.textContent = '❌ Ошибка сети';
-        console.error(err);
-    }
-});
+loadJobs();
+setInterval(loadJobs, 10000);
 </script>
 {% endblock %}

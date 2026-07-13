@@ -1,146 +1,148 @@
-"""Аннотация Excel: заливка, комментарии, ссылки (ТЗ раздел 12)."""
+"""Разметка результата в Excel: заливка, комментарии, ссылки на карточки Аршина.
+
+Адреса ячеек приходят готовыми из парсера (cell_refs), поэтому раскладку
+здесь заново определять не нужно — достаточно найти тот же лист.
+Если колонки для ссылки в исходном файле не было, она создаётся.
+"""
 from __future__ import annotations
-from pathlib import Path
 
 import logging
-from copy import copy
+
 from openpyxl import load_workbook
 from openpyxl.comments import Comment
-from openpyxl.styles import PatternFill
-from openpyxl.utils import get_column_letter, range_boundaries
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import coordinate_from_string, column_index_from_string
 
 from app.models.enums import JobIssueSeverity
 
 logger = logging.getLogger(__name__)
 
-# Цвета заливки по ТЗ раздел 12
 COLOR_MAP = {
-    JobIssueSeverity.RED: 'FFFFC7CE',
-    JobIssueSeverity.YELLOW: 'FFFFEB9C',
-    JobIssueSeverity.ORANGE: 'FFFFCC99',
-    JobIssueSeverity.INFO: None,  # без заливки
+    JobIssueSeverity.RED: "FFFFC7CE",
+    JobIssueSeverity.YELLOW: "FFFFEB9C",
+    JobIssueSeverity.ORANGE: "FFFFCC99",
+    JobIssueSeverity.INFO: None,
+}
+
+GROUP_TITLES = {
+    "si": "Счётчик",
+    "ct": "Трансформатор тока",
+    "vt": "Трансформатор напряжения",
 }
 
 
 class ExcelAnnotator:
-    """Аннотатор Excel с поддержкой merged-ячеек."""
+    """Размечает исходный файл, сохраняя его форматирование."""
 
-    def __init__(self, template_code: str, profiles_dir: str = "app/templates_profiles"):
+    def __init__(self, template_code: str = "auto", profiles_dir: str = "app/templates_profiles"):
         self.template_code = template_code
-        self.profiles_dir = Path(profiles_dir)
-        self.config = self._load_profile()
-
-    def _load_profile(self) -> dict:
-        import json
-        profile_path = self.profiles_dir / f"{self.template_code}.json"
-        with open(profile_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
 
     def annotate_and_save(self, input_path: str, output_path: str, results: list[dict]):
-        """Основной метод: чтение, аннотация, запись (два прохода)."""
-        # Первый проход: чтение данных (data_only=True)
-        wb_data = load_workbook(input_path, data_only=True)
-        # Второй проход: запись аннотации (без data_only, чтобы сохранить стили)
+        # data_only=False — чтобы сохранить формулы и стили исходного файла
         wb = load_workbook(input_path, data_only=False)
-        sheet = self._find_sheet(wb)
-        if sheet is None:
-            raise ValueError("Лист не найден")
 
-        # Группируем результаты по строкам
+        sheet_name = next((r.get("sheet_name") for r in results if r.get("sheet_name")), None)
+        if not sheet_name or sheet_name not in wb.sheetnames:
+            raise ValueError("Лист с ведомостью не найден в файле")
+        sheet = wb[sheet_name]
+
+        self._ensure_link_columns(sheet, results)
+
         for result in results:
-            row = result.get('excel_row')
-            if not row:
-                continue
-            self._annotate_device(sheet, row, result)
+            self._annotate_device(sheet, result)
 
-        # Сохраняем
         wb.save(output_path)
+        logger.info("Размеченный файл сохранён: %s", output_path)
 
-    def _find_sheet(self, wb):
-        patterns = self.config.get('sheet_patterns', [])
-        for sheet in wb.worksheets:
-            for pattern in patterns:
-                if pattern in sheet.title:
-                    return sheet
-        return None
+    def _ensure_link_columns(self, sheet, results: list[dict]):
+        """Создаёт колонку «Ссылка на карточку в Аршине», если её не было.
 
-    def _get_anchor_cell(self, sheet, cell_ref: str):
-        """Находит верхнюю левую ячейку merged-диапазона (ТЗ 12.4)."""
-        from openpyxl.utils.cell import coordinate_from_string, column_index_from_string
-        col_letter, row = coordinate_from_string(cell_ref)
-        col = column_index_from_string(col_letter)
+        Метролог мог прислать ведомость без такой колонки — тогда мы её
+        добавляем справа и подписываем, чтобы результат был самодостаточным.
+        """
+        new_cols: dict[int, str] = {}
+        header_row = None
 
-        for merged_range in sheet.merged_cells.ranges:
-            if col >= merged_range.min_col and col <= merged_range.max_col \
-               and row >= merged_range.min_row and row <= merged_range.max_row:
-                return f"{get_column_letter(merged_range.min_col)}{merged_range.min_row}"
-        return cell_ref
+        for r in results:
+            if r.get("link_column_exists"):
+                continue
+            ref = (r.get("cell_refs") or {}).get("link")
+            if not ref:
+                continue
+            letter, row = coordinate_from_string(ref)
+            col = column_index_from_string(letter)
+            new_cols.setdefault(col, r.get("device_kind", ""))
+            if header_row is None or row < header_row:
+                header_row = row
 
-    def _annotate_device(self, sheet, row: int, result: dict):
-        """Аннотация одного прибора."""
-        group_config = self._find_group_config(result['device_kind'])
-        if not group_config:
+        if not new_cols or header_row is None:
             return
 
-        cols = group_config['columns']
-        issues = result.get('issues', [])
-        selected_url = result.get('selected_url')
-        link_overwrite_policy = self.config.get('link_overwrite_policy', 'replace')
+        # Заголовок ставим на строку выше первой строки данных
+        title_row = max(1, header_row - 1)
+        for col, kind in sorted(new_cols.items()):
+            cell = sheet.cell(row=title_row, column=col)
+            if not cell.value:
+                title = GROUP_TITLES.get(kind, kind)
+                cell.value = f"Ссылка на карточку в Аршине ({title})"
+                cell.font = Font(bold=True, size=9)
+                cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
+            sheet.column_dimensions[get_column_letter(col)].width = 42
 
-        # 1. Заливка и комментарии для каждого поля
+        logger.info(
+            "Созданы колонки для ссылок: %s",
+            [get_column_letter(c) for c in sorted(new_cols)],
+        )
+
+    def _anchor(self, sheet, cell_ref: str) -> str:
+        """Верхняя левая ячейка объединённого диапазона (писать можно только в неё)."""
+        letter, row = coordinate_from_string(cell_ref)
+        col = column_index_from_string(letter)
+        for rng in sheet.merged_cells.ranges:
+            if rng.min_col <= col <= rng.max_col and rng.min_row <= row <= rng.max_row:
+                return f"{get_column_letter(rng.min_col)}{rng.min_row}"
+        return cell_ref
+
+    def _annotate_device(self, sheet, result: dict):
+        issues = result.get("issues", [])
+        selected_url = result.get("selected_url")
+
         for issue in issues:
-            cell_ref = issue.get('cell_ref')
+            cell_ref = issue.get("cell_ref")
             if not cell_ref:
                 continue
-            severity = issue.get('severity')
-            color = COLOR_MAP.get(severity)
-            anchor = self._get_anchor_cell(sheet, cell_ref)
+            anchor = self._anchor(sheet, cell_ref)
             cell = sheet[anchor]
-            # Заливка
+
+            color = COLOR_MAP.get(issue.get("severity"))
             if color:
                 cell.fill = PatternFill(fill_type="solid", fgColor=color)
-            # Комментарий (с автоподбором размера окна, чтобы текст был виден целиком)
-            message = issue.get('message', '')
+
+            message = issue.get("message", "")
             if message:
-                if cell.comment:
-                    text = f"{cell.comment.text}\n\n{message}"
-                else:
-                    text = message
+                text = f"{cell.comment.text}\n\n{message}" if cell.comment else message
                 cell.comment = self._make_comment(text)
 
-        # 2. Ссылка на Аршин в столбце arshin_link
-        link_col = cols.get('arshin_link')
-        if link_col and selected_url:
-            cell_ref = f"{get_column_letter(link_col)}{row}"
-            anchor = self._get_anchor_cell(sheet, cell_ref)
+        # Ссылка на карточку прибора в Аршине
+        link_ref = (result.get("cell_refs") or {}).get("link")
+        if link_ref and selected_url:
+            anchor = self._anchor(sheet, link_ref)
             cell = sheet[anchor]
-            if link_overwrite_policy == 'replace' or not cell.value:
-                cell.value = selected_url
-            elif link_overwrite_policy == 'append' and cell.value:
-                cell.value = f"{cell.value}; {selected_url}"
+            cell.value = selected_url
+            cell.hyperlink = selected_url
+            cell.font = Font(color="0563C1", underline="single", size=9)
 
     def _make_comment(self, text: str) -> Comment:
-        """Комментарий с размером окна под объём текста.
+        """Комментарий с окном под объём текста.
 
-        openpyxl по умолчанию делает крошечный квадратик, в котором длинное
-        сообщение обрезается, и метрологу приходится растягивать его вручную.
-        Считаем размер по числу строк с учётом переносов.
+        По умолчанию openpyxl делает крошечный квадратик, в котором длинное
+        сообщение обрезается и его приходится растягивать вручную.
         """
         CHARS_PER_LINE = 45
-        lines = 0
-        for para in text.split("\n"):
-            lines += max(1, -(-len(para) // CHARS_PER_LINE))  # ceil
-
-        width = 380
-        height = max(90, min(20 * lines + 30, 600))
+        lines = sum(max(1, -(-len(p) // CHARS_PER_LINE)) for p in text.split("\n"))
 
         comment = Comment(text, "Проверка по ФГИС «Аршин»")
-        comment.width = width
-        comment.height = height
+        comment.width = 380
+        comment.height = max(90, min(20 * lines + 30, 600))
         return comment
-
-    def _find_group_config(self, device_kind: str):
-        for group in self.config.get('device_groups', []):
-            if group['device_kind'] == device_kind:
-                return group
-        return None

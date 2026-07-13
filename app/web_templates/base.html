@@ -1,37 +1,70 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Arshin Checker{% endblock %}</title>
-    <link rel="stylesheet" href="/static/css/style.css">
-    {% block extra_head %}{% endblock %}
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Проверка по ФГИС «Аршин»{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
+{% block masthead %}
+<header class="masthead">
+  <div class="masthead-inner">
+    <a href="/" class="wordmark">Сверка с Аршином<span> · поверка СИ</span></a>
     <nav>
-        <div class="container">
-            <a href="/" class="brand">Arshin Checker</a>
-            <div class="nav-links">
-                {% if user %}
-                    <span>{{ user.email }}</span>
-                    <a href="/logout">Выйти</a>
-                {% else %}
-                    <a href="/login">Войти</a>
-                {% endif %}
-            </div>
-        </div>
+      <span class="whoami" id="whoami"></span>
+      <a href="#" id="logout">Выйти</a>
     </nav>
-    <main>
-        <div class="container">
-            {% block content %}{% endblock %}
-        </div>
-    </main>
-    <footer>
-        <div class="container">
-            <p>&copy; 2026 Arshin Excel Checker</p>
-        </div>
-    </footer>
-    <!-- <script src="/static/js/app.js"></script> -->
-    {% block extra_scripts %}{% endblock %}
+  </div>
+</header>
+{% endblock %}
+
+<main>{% block content %}{% endblock %}</main>
+
+<script>
+const token = localStorage.getItem('token');
+
+function ruDateTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', year:'numeric',
+                                     hour:'2-digit', minute:'2-digit' });
+}
+function ruDuration(sec) {
+  if (sec === null || sec === undefined) return '—';
+  if (sec < 60) return sec + ' с';
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  if (h) return h + ' ч ' + m + ' мин';
+  return m + ' мин';
+}
+function logout(e) {
+  if (e) e.preventDefault();
+  localStorage.removeItem('token');
+  window.location.href = '/login';
+}
+document.getElementById('logout')?.addEventListener('click', logout);
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { 'Authorization': 'Bearer ' + token, ...(opts.headers || {}) },
+  });
+  if (res.status === 401) { logout(); throw new Error('Не авторизован'); }
+  return res;
+}
+
+(async () => {
+  const el = document.getElementById('whoami');
+  if (!el || !token) return;
+  try {
+    const r = await api('/api/me');
+    if (r.ok) {
+      const me = await r.json();
+      el.textContent = me.fullname || me.email;
+    }
+  } catch (_) {}
+})();
+</script>
+{% block extra_scripts %}{% endblock %}
 </body>
 </html>

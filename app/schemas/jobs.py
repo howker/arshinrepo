@@ -64,3 +64,37 @@ class RunJobResponse(BaseModel):
     status: JobStatus
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class JobEventResponse(BaseModel):
+    """Событие обработки — строка живого лога."""
+    id: UUID
+    item_index: int | None = None
+    level: str
+    message: str
+    created_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class JobProgressResponse(BaseModel):
+    """Прогресс обработки для живого отображения в интерфейсе."""
+    job_id: UUID
+    status: JobStatus
+    total_items: int
+    processed_items: int
+    current_item_label: str | None = None
+
+    # Позиция в очереди (1 = следующий на обработку); None если не в очереди
+    queue_position: int | None = None
+
+    # Секунды: сколько прошло и сколько примерно осталось
+    elapsed_seconds: int | None = None
+    eta_seconds: int | None = None
+
+    matched_count: int = 0
+    mismatch_count: int = 0
+    ambiguous_count: int = 0
+    source_uncertain_count: int = 0
+
+    events: list[JobEventResponse] = []

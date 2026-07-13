@@ -1,183 +1,241 @@
 {% extends "base.html" %}
-
-{% block title %}Детали проверки - Arshin Checker{% endblock %}
+{% block title %}Проверка — Сверка с Аршином{% endblock %}
 
 {% block content %}
-<h1>Детали проверки</h1>
-<div id="job-info">Загрузка...</div>
-<div id="actions">
-    <button id="run-btn" style="display:none;">Запустить проверку</button>
-    <button id="download-btn" style="display:none;">Скачать результат</button>
-    <button id="cancel-btn" style="display:none;">Прервать</button>
+<div class="row" style="margin-bottom:6px;">
+  <h1 id="filename">Проверка</h1>
+  <span class="spacer"></span>
+  <span class="tag idle" id="status-tag">…</span>
 </div>
-<div id="issues-list"></div>
-<a href="/" class="btn-secondary">Назад к списку</a>
+<p class="subtitle" id="timing">—</p>
+
+<div id="queue-notice"></div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Ход проверки</h2>
+    <span class="hint" id="current-item"></span>
+  </div>
+
+  <div class="scale">
+    <div class="scale-track"><div class="scale-fill" id="scale-fill"></div></div>
+  </div>
+  <div class="scale-meta">
+    <span><strong id="done">0</strong> из <strong id="total">0</strong> приборов</span>
+    <span class="spacer"></span>
+    <span>прошло <strong id="elapsed">—</strong></span>
+    <span>осталось <strong id="eta">—</strong></span>
+  </div>
+
+  <div class="gauges" style="margin-top:18px;">
+    <div class="gauge ok">    <div class="gauge-label">Совпало</div>       <div class="gauge-value" id="g-ok">0</div></div>
+    <div class="gauge alert"> <div class="gauge-label">Расхождения</div>   <div class="gauge-value" id="g-mis">0</div></div>
+    <div class="gauge warn">  <div class="gauge-label">Неоднозначно</div>  <div class="gauge-value" id="g-amb">0</div></div>
+    <div class="gauge">       <div class="gauge-label">Не найдено</div>    <div class="gauge-value" id="g-unk">0</div></div>
+  </div>
+
+  <div class="row" style="margin-top:18px;">
+    <button id="run-btn" style="display:none;">Запустить проверку</button>
+    <button id="download-btn" style="display:none;">Скачать размеченный файл</button>
+    <button id="cancel-btn" class="btn-danger" style="display:none;">Прервать</button>
+    <span class="spacer"></span>
+    <a href="/" class="btn btn-ghost" style="text-decoration:none;">К списку</a>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Журнал обработки</h2>
+    <span class="hint">Обновляется автоматически</span>
+  </div>
+  <div class="tape" id="tape">
+    <div class="tape-line info"><span class="m">Ожидание запуска…</span></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Замечания</h2>
+    <span class="hint" id="issues-hint"></span>
+  </div>
+  <div id="issues"><div class="empty">Пока нет данных</div></div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
-const token = localStorage.getItem('token');
 if (!token) window.location.href = '/login';
 
 const jobId = window.location.pathname.split('/').pop();
-let pollInterval = null;
+let poll = null;
+let lastEventCount = 0;
 
-async function loadJob() {
-    try {
-        const resp = await fetch(`/api/jobs/${jobId}`, {
-            headers: {'Authorization': `Bearer ${token}`}
-        });
-        if (!resp.ok) throw new Error('Failed');
-        const job = await resp.json();
-        
-        document.getElementById('job-info').innerHTML = `
-            <p><strong>Файл:</strong> ${job.source_filename}</p>
-            <p><strong>Статус:</strong> <span id="job-status">${job.status}</span></p>
-            <p><strong>Всего приборов:</strong> ${job.total_items || 0}</p>
-            <p><strong>Совпало:</strong> ${job.matched_count || 0}</p>
-            <p><strong>Расхождений:</strong> ${job.mismatch_count || 0}</p>
-            <p><strong>Неоднозначно:</strong> ${job.ambiguous_count || 0}</p>
-            <p><strong>Не проверено:</strong> ${job.source_uncertain_count || 0}</p>
-            <p><strong>Заглушки дат:</strong> ${job.placeholder_count || 0}</p>
-        `;
+const STATUS = {
+  uploaded:                 ['Загружен',         'idle'],
+  queued:                   ['В очереди',        'idle'],
+  processing:               ['Проверяется',      'warn'],
+  completed:                ['Расхождений нет',  'ok'],
+  completed_with_issues:    ['Есть замечания',   'alert'],
+  failed:                   ['Ошибка',           'alert'],
+  failed_source_unavailable:['Аршин недоступен', 'alert'],
+  cancelled:                ['Прервана',         'idle'],
+};
 
-        // Кнопка запуска
-        const runBtn = document.getElementById('run-btn');
-        if (job.status === 'uploaded' || job.status === 'failed') {
-            runBtn.style.display = 'inline-block';
-            runBtn.onclick = async () => {
-                runBtn.disabled = true;
-                runBtn.textContent = 'Запускаем...';
-                try {
-                    const resp = await fetch(`/api/jobs/${jobId}/run`, {
-                        method: 'POST',
-                        headers: {'Authorization': `Bearer ${token}`}
-                    });
-                    if (resp.ok) {
-                        runBtn.textContent = '✅ Запущено';
-                        setTimeout(() => runBtn.style.display = 'none', 2000);
-                        loadJob(); // сразу обновить статус
-                    } else {
-                        alert('Ошибка запуска');
-                        runBtn.textContent = 'Запустить проверку';
-                        runBtn.disabled = false;
-                    }
-                } catch (e) {
-                    alert('Ошибка сети');
-                    runBtn.textContent = 'Запустить проверку';
-                    runBtn.disabled = false;
-                }
-            };
-        } else {
-            runBtn.style.display = 'none';
-        }
+const $ = (id) => document.getElementById(id);
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
 
-        // Кнопка скачивания
-        const downloadBtn = document.getElementById('download-btn');
-        if (job.status === 'completed' || job.status === 'completed_with_issues') {
-            downloadBtn.style.display = 'inline-block';
-            downloadBtn.onclick = async () => {
-                downloadBtn.disabled = true;
-                downloadBtn.textContent = 'Готовим файл...';
-                try {
-                    const response = await fetch(`/api/jobs/${jobId}/download/result`, {
-                        headers: {'Authorization': `Bearer ${token}`}
-                    });
-                    if (!response.ok) {
-                        throw new Error(`Download failed: ${response.status}`);
-                    }
-                    const blob = await response.blob();
-                    const contentDisposition = response.headers.get('Content-Disposition') || '';
-                    const filenameMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
-                    const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : 'result.xlsx';
-                    const objectUrl = URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.href = objectUrl;
-                    link.download = filename;
-                    document.body.appendChild(link);
-                    link.click();
-                    link.remove();
-                    URL.revokeObjectURL(objectUrl);
-                } catch (error) {
-                    alert('Не удалось скачать результат. Попробуйте ещё раз.');
-                    console.error(error);
-                } finally {
-                    downloadBtn.disabled = false;
-                    downloadBtn.textContent = 'Скачать результат';
-                }
-            };
-        } else {
-            downloadBtn.style.display = 'none';
-        }
+function renderTape(events, running) {
+  const box = $('tape');
+  if (!events.length && !running) return;
 
-        // Кнопка отмены
-        const cancelBtn = document.getElementById('cancel-btn');
-        if (job.status === 'queued' || job.status === 'processing') {
-            cancelBtn.style.display = 'inline-block';
-            cancelBtn.disabled = false;
-            cancelBtn.textContent = 'Прервать';
-            cancelBtn.onclick = async () => {
-                if (!window.confirm('Прервать проверку? Уже обработанные приборы сохранятся.')) return;
-                cancelBtn.disabled = true;
-                cancelBtn.textContent = 'Прерываем...';
-                try {
-                    const resp = await fetch(`/api/jobs/${jobId}/cancel`, {
-                        method: 'POST',
-                        headers: {'Authorization': `Bearer ${token}`}
-                    });
-                    if (!resp.ok) throw new Error('Cancel request failed');
-                    loadJob();
-                } catch (e) {
-                    alert('Не удалось прервать проверку');
-                    cancelBtn.disabled = false;
-                    cancelBtn.textContent = 'Прервать';
-                }
-            };
-        } else {
-            cancelBtn.style.display = 'none';
-        }
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
 
-        // Загружаем issues
-        const issuesResp = await fetch(`/api/jobs/${jobId}/issues`, {
-            headers: {'Authorization': `Bearer ${token}`}
-        });
-        if (issuesResp.ok) {
-            const issues = await issuesResp.json();
-            const container = document.getElementById('issues-list');
-            if (!issues.length) {
-                container.innerHTML = '<p>Нет проблем</p>';
-                return;
-            }
-            let html = '<h3>Проблемы</h3><table><tr><th>Ячейка</th><th>Код</th><th>Сообщение</th></tr>';
-            issues.forEach(issue => {
-                html += `<tr>
-                    <td>${issue.cell || '—'}</td>
-                    <td>${issue.code || '—'}</td>
-                    <td>${issue.message || ''}</td>
-                </tr>`;
-            });
-            html += '</table>';
-            container.innerHTML = html;
-        }
+  let html = '';
+  for (const e of events) {
+    const t = e.created_at
+      ? new Date(e.created_at).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit', second:'2-digit'})
+      : '';
+    html += '<div class="tape-line ' + esc(e.level) + '">'
+          + '<span class="t">' + t + '</span>'
+          + '<span class="m">' + esc(e.message) + '</span></div>';
+  }
+  if (running) html += '<div class="tape-line"><span class="tape-cursor"></span></div>';
+  if (!html) html = '<div class="tape-line info"><span class="m">Ожидание запуска…</span></div>';
 
-        // Поллинг статуса, если не завершено
-        const statusText = document.getElementById('job-status');
-        if (job.status === 'processing' || job.status === 'queued') {
-            if (!pollInterval) {
-                pollInterval = setInterval(loadJob, 3000);
-            }
-        } else {
-            if (pollInterval) {
-                clearInterval(pollInterval);
-                pollInterval = null;
-            }
-        }
-
-    } catch (err) {
-        document.getElementById('job-info').textContent = 'Ошибка загрузки';
-    }
+  box.innerHTML = html;
+  if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
-loadJob();
+async function loadIssues() {
+  try {
+    const res = await api('/api/jobs/' + jobId + '/issues');
+    const issues = await res.json();
+    const box = $('issues');
+
+    const real = issues.filter(i => i.severity !== 'info');
+    $('issues-hint').textContent = real.length ? real.length + ' требуют внимания' : '';
+
+    if (!issues.length) {
+      box.innerHTML = '<div class="empty">Пока нет данных</div>';
+      return;
+    }
+    if (!real.length) {
+      box.innerHTML = '<div class="notice ok">Все приборы совпали с данными Аршина.</div>';
+      return;
+    }
+
+    const SEV = { red: 'alert', orange: 'warn', yellow: 'warn', info: 'idle' };
+    let html = '<table><thead><tr><th>Ячейка</th><th>Замечание</th></tr></thead><tbody>';
+    for (const i of real) {
+      html += '<tr><td class="cell"><span class="tag ' + (SEV[i.severity] || 'idle') + '">'
+            + esc(i.cell || '—') + '</span></td>'
+            + '<td>' + esc(i.message) + '</td></tr>';
+    }
+    box.innerHTML = html + '</tbody></table>';
+  } catch (e) { /* тихо */ }
+}
+
+async function tick() {
+  try {
+    const res = await api('/api/jobs/' + jobId + '/progress');
+    if (!res.ok) throw new Error();
+    const p = await res.json();
+
+    const [label, cls] = STATUS[p.status] || [p.status, 'idle'];
+    $('status-tag').textContent = label;
+    $('status-tag').className = 'tag ' + cls;
+
+    const total = p.total_items || 0;
+    const done = p.processed_items || 0;
+    $('done').textContent = done;
+    $('total').textContent = total;
+    $('scale-fill').style.width = (total ? Math.round(done / total * 100) : 0) + '%';
+
+    $('elapsed').textContent = ruDuration(p.elapsed_seconds);
+    $('eta').textContent = (p.status === 'processing') ? ruDuration(p.eta_seconds) : '—';
+    $('current-item').textContent = p.current_item_label ? 'Сейчас: ' + p.current_item_label : '';
+
+    $('g-ok').textContent  = p.matched_count;
+    $('g-mis').textContent = p.mismatch_count;
+    $('g-amb').textContent = p.ambiguous_count;
+    $('g-unk').textContent = p.source_uncertain_count;
+
+    // Очередь
+    if (p.status === 'queued' && p.queue_position) {
+      $('queue-notice').innerHTML = '<div class="notice"></div>';
+      $('queue-notice').firstChild.textContent =
+        p.queue_position === 1
+          ? 'Ваша проверка следующая в очереди — вот-вот начнётся.'
+          : 'В очереди перед вами задач: ' + (p.queue_position - 1) + '. Можно закрыть страницу — работа не прервётся.';
+    } else {
+      $('queue-notice').innerHTML = '';
+    }
+
+    const running = (p.status === 'processing' || p.status === 'queued');
+    renderTape(p.events || [], running);
+
+    // Кнопки
+    $('run-btn').style.display      = ['uploaded','failed','failed_source_unavailable','cancelled'].includes(p.status) ? 'inline-block' : 'none';
+    $('cancel-btn').style.display   = running ? 'inline-block' : 'none';
+    $('download-btn').style.display = ['completed','completed_with_issues'].includes(p.status) ? 'inline-block' : 'none';
+
+    if ((p.events || []).length !== lastEventCount || !running) {
+      lastEventCount = (p.events || []).length;
+      loadIssues();
+    }
+
+    if (!running && poll) { clearInterval(poll); poll = null; }
+    if (running && !poll) { poll = setInterval(tick, 2000); }
+  } catch (e) { /* тихо, следующий тик */ }
+}
+
+(async () => {
+  try {
+    const r = await api('/api/jobs/' + jobId);
+    const j = await r.json();
+    $('filename').textContent = j.source_filename;
+    $('timing').textContent = 'Загружен ' + ruDateTime(j.created_at);
+  } catch (e) {}
+})();
+
+$('run-btn').onclick = async () => {
+  const b = $('run-btn'); b.disabled = true; b.textContent = 'Запускаем…';
+  try {
+    await api('/api/jobs/' + jobId + '/run', { method: 'POST' });
+    lastEventCount = -1;
+    await tick();
+  } finally { b.disabled = false; b.textContent = 'Запустить проверку'; }
+};
+
+$('cancel-btn').onclick = async () => {
+  if (!confirm('Прервать проверку? Обработанные приборы сохранятся.')) return;
+  const b = $('cancel-btn'); b.disabled = true; b.textContent = 'Прерываем…';
+  try {
+    await api('/api/jobs/' + jobId + '/cancel', { method: 'POST' });
+    await tick();
+  } finally { b.disabled = false; b.textContent = 'Прервать'; }
+};
+
+$('download-btn').onclick = async () => {
+  const b = $('download-btn'); b.disabled = true; b.textContent = 'Готовим файл…';
+  try {
+    const res = await api('/api/jobs/' + jobId + '/download/result');
+    if (!res.ok) throw new Error();
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename\*=UTF-8''([^;]+)/i);
+    const name = m ? decodeURIComponent(m[1]) : 'результат.xlsx';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Не удалось скачать файл. Попробуйте ещё раз.');
+  } finally { b.disabled = false; b.textContent = 'Скачать размеченный файл'; }
+};
+
+tick();
+setInterval(() => { if (!poll) tick(); }, 5000);
 </script>
 {% endblock %}

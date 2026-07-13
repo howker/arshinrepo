@@ -117,13 +117,31 @@ def run_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
             detail=f"Job with status '{job.status.value}' cannot be re-queued",
         )
 
+    # Приоритет по размеру файла: короткие проверки не должны ждать
+    # часами за чужим большим файлом (защита времени метролога).
+    from datetime import datetime, timezone
+    from app.core.config import get_settings
+    from app.services.queue import count_devices_in_file, priority_for_items
+
+    settings = get_settings()
+    full_path = settings.storage_root / job.source_file_path
+    total = count_devices_in_file(str(full_path), settings.default_template_code)
+    priority = priority_for_items(total)
+
     job.status = JobStatus.QUEUED
     job.error_message = None
+    job.priority = priority
+    job.queued_at = datetime.now(timezone.utc)
+    if total:
+        job.total_items = total
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    process_excel_job.delay(str(job.id))
+    logger.info(
+        "Job %s поставлен в очередь: приборов=%s, приоритет=%s", job.id, total, priority
+    )
+    process_excel_job.apply_async(args=[str(job.id)], priority=priority)
     return job
 
 

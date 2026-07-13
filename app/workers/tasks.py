@@ -16,6 +16,7 @@ from app.models.job_item import JobItem
 from app.models.file_object import FileObject
 from app.models.job_item_check import JobItemCheck
 from app.models.job_issue import JobIssue
+from app.models.job_event import JobEvent
 from app.models.arshin_audit import ArshinAudit
 from app.models.enums import (
     JobStatus,
@@ -36,6 +37,11 @@ from app.services.report import build_report, save_report_to_json
 logger = logging.getLogger(__name__)
 
 
+def log_event(db, job_id, message: str, level: str = "info", item_index: int | None = None):
+    """Пишет событие в ленту — для живого лога в интерфейсе метролога."""
+    db.add(JobEvent(job_id=job_id, item_index=item_index, level=level, message=message))
+
+
 @shared_task(name="process_excel_job")
 def process_excel_job(job_id_str: str) -> str:
     """Основная задача обработки Excel (последовательный пайплайн)."""
@@ -52,6 +58,10 @@ def process_excel_job(job_id_str: str) -> str:
     job.status = JobStatus.PROCESSING
     job.started_at = datetime.now(timezone.utc)
     job.error_message = None
+    job.processed_items = 0
+    job.current_item_label = None
+    db.query(JobEvent).filter(JobEvent.job_id == job.id).delete()
+    log_event(db, job.id, f"Начата проверка файла «{job.source_filename}»")
     db.commit()
 
     counts = {
@@ -71,7 +81,7 @@ def process_excel_job(job_id_str: str) -> str:
             raise FileNotFoundError(f"Source file not found: {full_source_path}")
 
         # 2. Парсинг Excel
-        parser = TemplateDrivenParser(template_code="pril_1_main")
+        parser = TemplateDrivenParser()
         devices = parser.parse_workspace_file(str(full_source_path))
 
         if not devices:
@@ -83,6 +93,7 @@ def process_excel_job(job_id_str: str) -> str:
             return "No devices found"
 
         job.total_items = len(devices)
+        log_event(db, job.id, f"Найдено приборов в файле: {len(devices)}")
         db.commit()
 
         # 3. Последовательная обработка каждого прибора
@@ -100,6 +111,9 @@ def process_excel_job(job_id_str: str) -> str:
 
             try:
                 logger.info("Processing device %d/%d: %s", idx, len(devices), device.get('serial_norm'))
+                label = f"{(device.get('type_raw') or '').strip()} № {device.get('serial_norm') or '—'}".strip()
+                job.current_item_label = label[:512]
+                db.commit()
 
                 # 3a. Определяем семейство госреестра по типу из файла.
                 # Без этого короткий серийник даёт тысячи чужих приборов,
@@ -246,6 +260,22 @@ def process_excel_job(job_id_str: str) -> str:
                 elif comp_result.status == JobItemStatus.PLACEHOLDER:
                     counts['placeholder'] += 1
 
+                # Событие в лог — что получилось по этому прибору
+                _status_text = {
+                    JobItemStatus.MATCHED: ("Совпадает с Аршином", "success"),
+                    JobItemStatus.MISMATCH: ("Найдены расхождения", "error"),
+                    JobItemStatus.AMBIGUOUS: ("Неоднозначно — нужна проверка", "warning"),
+                    JobItemStatus.SOURCE_UNCERTAIN: ("Не найдено в Аршине", "warning"),
+                    JobItemStatus.PLACEHOLDER: ("Некорректные данные в файле", "warning"),
+                }.get(comp_result.status, ("Обработан", "info"))
+                log_event(
+                    db, job.id,
+                    f"Прибор {idx} из {len(devices)}: {label} — {_status_text[0]}",
+                    level=_status_text[1],
+                    item_index=idx,
+                )
+                job.processed_items = idx
+
                 # Сохраняем прогресс
                 job.matched_count = counts['matched']
                 job.mismatch_count = counts['mismatch']
@@ -284,11 +314,18 @@ def process_excel_job(job_id_str: str) -> str:
                 db.add(job_issue)
                 counts['source_uncertain'] += 1
                 job.source_uncertain_count = counts['source_uncertain']
+                job.processed_items = idx
+                log_event(
+                    db, job.id,
+                    f"Прибор {idx} из {len(devices)}: ошибка обработки — {str(e)}",
+                    level="error",
+                    item_index=idx,
+                )
                 db.commit()
                 continue
 
         # 4. Аннотация Excel
-        annotator = ExcelAnnotator(template_code="pril_1_main")
+        annotator = ExcelAnnotator()
         result_filename = f"RESULT_{job.source_filename}"
         result_relative_path = f"results/{job.id}/{result_filename}"
         full_result_path = get_settings().storage_root / result_relative_path
@@ -333,6 +370,13 @@ def process_excel_job(job_id_str: str) -> str:
             job.status = JobStatus.COMPLETED
 
         job.finished_at = datetime.now(timezone.utc)
+        job.current_item_label = None
+        log_event(
+            db, job.id,
+            f"Проверка завершена. Совпало: {counts['matched']}, расхождений: {counts['mismatch']}, "
+            f"неоднозначно: {counts['ambiguous']}, не найдено: {counts['source_uncertain']}",
+            level="success",
+        )
         db.commit()
 
         logger.info("Job %s completed", job_id_str)
