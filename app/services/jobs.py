@@ -104,17 +104,32 @@ def get_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
     return job
 
 
-def run_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
+def run_job_for_user(
+    db: Session,
+    user: User,
+    job_id: uuid.UUID,
+    restart: bool = True,
+) -> Job:
     """Постановка задачи в очередь (ТЗ §13)."""
     job = get_job_for_user(db, user, job_id)
 
     if job.status in {JobStatus.QUEUED, JobStatus.PROCESSING}:
         return job
 
-    if job.status not in {JobStatus.UPLOADED, JobStatus.FAILED, JobStatus.FAILED_SOURCE_UNAVAILABLE}:
+    # Прерванную проверку метролог должен уметь запустить заново —
+    # либо продолжить с места остановки (см. параметр restart).
+    RESTARTABLE = {
+        JobStatus.UPLOADED,
+        JobStatus.FAILED,
+        JobStatus.FAILED_SOURCE_UNAVAILABLE,
+        JobStatus.CANCELLED,
+        JobStatus.COMPLETED,
+        JobStatus.COMPLETED_WITH_ISSUES,
+    }
+    if job.status not in RESTARTABLE:
         raise HTTPException(
             status_code=409,
-            detail=f"Job with status '{job.status.value}' cannot be re-queued",
+            detail=f"Проверку в статусе «{job.status.value}» нельзя запустить",
         )
 
     # Приоритет по размеру файла: короткие проверки не должны ждать
@@ -130,17 +145,41 @@ def run_job_for_user(db: Session, user: User, job_id: uuid.UUID) -> Job:
 
     # total_items и прогресс выставляет ТОЛЬКО воркер: если их трогать здесь,
     # запись API перетрёт состояние уже начавшейся обработки.
+    if restart:
+        # Проверка с нуля: чистим результаты прошлой попытки, иначе счётчики
+        # сложатся, а в журнале останутся строки от прерванного прогона.
+        from app.models.job_item import JobItem
+        from app.models.job_issue import JobIssue
+        from app.models.job_event import JobEvent
+
+        db.query(JobIssue).filter(JobIssue.job_id == job.id).delete(synchronize_session=False)
+        db.query(JobItem).filter(JobItem.job_id == job.id).delete(synchronize_session=False)
+        db.query(JobEvent).filter(JobEvent.job_id == job.id).delete(synchronize_session=False)
+
+        job.processed_items = 0
+        job.total_items = 0
+        job.matched_count = 0
+        job.mismatch_count = 0
+        job.ambiguous_count = 0
+        job.source_uncertain_count = 0
+        job.placeholder_count = 0
+        job.started_at = None
+        job.finished_at = None
+    # При resume прогресс и уже проверенные приборы сохраняются —
+    # воркер продолжит с того места, где остановился.
+
     job.status = JobStatus.QUEUED
     job.error_message = None
     job.priority = priority
     job.queued_at = datetime.now(timezone.utc)
-    job.processed_items = 0
     job.current_item_label = None
     db.add(job)
     db.commit()
 
     logger.info("Job %s поставлен в очередь, приоритет=%s", job.id, priority)
-    process_excel_job.apply_async(args=[str(job.id)], priority=priority)
+    process_excel_job.apply_async(
+        args=[str(job.id)], kwargs={"restart": restart}, priority=priority
+    )
     return job
 
 

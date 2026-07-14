@@ -140,6 +140,7 @@ async function tick() {
     const res = await api('/api/jobs/' + jobId + '/progress');
     if (!res.ok) throw new Error();
     const p = await res.json();
+    lastProgress = p;
 
     const [label, cls] = STATUS[p.status] || [p.status, 'idle'];
     $('status-tag').textContent = label;
@@ -167,7 +168,7 @@ async function tick() {
         p.queue_position === 1
           ? 'Ваша проверка следующая в очереди — вот-вот начнётся.'
           : 'В очереди перед вами задач: ' + (p.queue_position - 1) + '. Можно закрыть страницу — работа не прервётся.';
-    } else {
+    } else if (!document.getElementById('resume-ask')) {
       $('queue-notice').innerHTML = '';
     }
 
@@ -198,13 +199,65 @@ async function tick() {
   } catch (e) {}
 })();
 
-$('run-btn').onclick = async () => {
-  const b = $('run-btn'); b.disabled = true; b.textContent = 'Запускаем…';
+let lastProgress = null;
+
+async function startRun(restart) {
+  const b = $('run-btn');
+  b.disabled = true;
+  b.textContent = restart ? 'Начинаем заново…' : 'Продолжаем…';
+  $('queue-notice').innerHTML = '';
+
   try {
-    await api('/api/jobs/' + jobId + '/run', { method: 'POST' });
+    const res = await api('/api/jobs/' + jobId + '/run?restart=' + restart, { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      $('queue-notice').innerHTML = '<div class="notice error"></div>';
+      $('queue-notice').firstChild.textContent =
+        data.detail || 'Не удалось запустить проверку. Попробуйте ещё раз.';
+      return;
+    }
     lastEventCount = -1;
+    if (poll) { clearInterval(poll); poll = null; }
     await tick();
-  } finally { b.disabled = false; b.textContent = 'Запустить проверку'; }
+  } catch (e) {
+    $('queue-notice').innerHTML =
+      '<div class="notice error">Сервер не ответил. Обновите страницу и попробуйте снова.</div>';
+  } finally {
+    b.disabled = false;
+    b.textContent = 'Запустить проверку';
+  }
+}
+
+$('run-btn').onclick = async () => {
+  const p = lastProgress;
+  const interrupted = p && p.status === 'cancelled' && p.processed_items > 0;
+
+  if (!interrupted) {
+    await startRun(true);
+    return;
+  }
+
+  // Проверку прерывали — метролог решает, продолжить или начать заново.
+  const left = (p.total_items || 0) - p.processed_items;
+  $('queue-notice').innerHTML =
+    '<div class="notice" id="resume-ask">' +
+      '<p style="margin:0 0 10px;">Проверка была прервана на приборе <strong>' +
+        p.processed_items + '</strong> из <strong>' + (p.total_items || '?') + '</strong>. ' +
+        'Продолжить с этого места или проверить файл заново?</p>' +
+      '<div class="row">' +
+        '<button id="btn-resume">Продолжить (осталось ' + left + ')</button>' +
+        '<button id="btn-restart" class="btn-ghost">Начать заново</button>' +
+        '<button id="btn-cancel-ask" class="btn-ghost">Отмена</button>' +
+      '</div>' +
+      '<p style="margin:10px 0 0; font-size:13px; color:#5A6068;">' +
+        'При продолжении уже проверенные приборы не запрашиваются в Аршине повторно. ' +
+        'Проверка заново даёт единый срез данных реестра на текущий момент.' +
+      '</p>' +
+    '</div>';
+
+  $('btn-resume').onclick = () => startRun(false);
+  $('btn-restart').onclick = () => startRun(true);
+  $('btn-cancel-ask').onclick = () => { $('queue-notice').innerHTML = ''; };
 };
 
 $('cancel-btn').onclick = async () => {

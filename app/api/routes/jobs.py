@@ -85,11 +85,17 @@ def get_job(
 @router.post("/{job_id}/run", response_model=RunJobResponse)
 def run_job(
     job_id: uuid.UUID,
+    restart: bool = True,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Запустить обработку job (ТЗ §13)."""
-    job = run_job_for_user(db, current_user, job_id)
+    """Запустить проверку.
+
+    restart=True  — начать заново (единый срез данных Аршина).
+    restart=False — продолжить с места остановки (не терять уже проверенное
+                    и не нагружать Аршин повторными запросами).
+    """
+    job = run_job_for_user(db, current_user, job_id, restart=restart)
     return RunJobResponse(job_id=job.id, status=job.status)
 
 

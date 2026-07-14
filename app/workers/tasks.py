@@ -43,7 +43,7 @@ def log_event(db, job_id, message: str, level: str = "info", item_index: int | N
 
 
 @shared_task(name="process_excel_job")
-def process_excel_job(job_id_str: str) -> str:
+def process_excel_job(job_id_str: str, restart: bool = True) -> str:
     """Основная задача обработки Excel (последовательный пайплайн)."""
     db = SessionLocal()
     settings = get_settings()
@@ -56,20 +56,34 @@ def process_excel_job(job_id_str: str) -> str:
     logger.info("Starting processing job %s", job_id_str)
 
     job.status = JobStatus.PROCESSING
-    job.started_at = datetime.now(timezone.utc)
     job.error_message = None
-    job.processed_items = 0
     job.current_item_label = None
-    db.query(JobEvent).filter(JobEvent.job_id == job.id).delete()
-    log_event(db, job.id, f"Начата проверка файла «{job.source_filename}»")
+
+    if restart:
+        job.started_at = datetime.now(timezone.utc)
+        job.processed_items = 0
+        db.query(JobEvent).filter(JobEvent.job_id == job.id).delete()
+        log_event(db, job.id, f"Начата проверка файла «{job.source_filename}»")
+        resume_from = 0
+    else:
+        # Продолжаем с места остановки: приборы до resume_from уже проверены
+        # в прошлый раз, повторно в Аршин за ними не ходим.
+        resume_from = job.processed_items or 0
+        if not job.started_at:
+            job.started_at = datetime.now(timezone.utc)
+        log_event(
+            db, job.id,
+            f"Проверка возобновлена с прибора {resume_from + 1}",
+            level="info",
+        )
     db.commit()
 
     counts = {
-        "matched": 0,
-        "mismatch": 0,
-        "ambiguous": 0,
-        "source_uncertain": 0,
-        "placeholder": 0,
+        "matched": job.matched_count if not restart else 0,
+        "mismatch": job.mismatch_count if not restart else 0,
+        "ambiguous": job.ambiguous_count if not restart else 0,
+        "source_uncertain": job.source_uncertain_count if not restart else 0,
+        "placeholder": job.placeholder_count if not restart else 0,
     }
 
     try:
@@ -101,6 +115,9 @@ def process_excel_job(job_id_str: str) -> str:
         all_results = []
 
         for idx, device in enumerate(devices, 1):
+            if idx <= resume_from:
+                continue  # прибор проверен в прошлый раз — в Аршин не ходим
+
             # Проверяем отмену ТОЧЕЧНЫМ запросом, а не db.refresh(job):
             # refresh перечитывает весь объект и затирает несохранённые поля
             # (status=PROCESSING, processed_items), из-за чего прогресс
