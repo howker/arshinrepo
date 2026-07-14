@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     arshin_timeout_connect: float = Field(default=5.0, alias="ARSHIN_TIMEOUT_CONNECT")
     arshin_timeout_read: float = Field(default=20.0, alias="ARSHIN_TIMEOUT_READ")
     arshin_max_retries: int = Field(default=4, alias="ARSHIN_MAX_RETRIES")
+
+    # Регистрация закрыта для посторонних: без верного кода приглашения
+    # новый аккаунт не создать. Это защищает от чужих задач, которые могли бы
+    # без ограничений нагружать ФГИС «Аршин» от имени нашего сервиса.
+    registration_invite_code: str | None = Field(default=None, alias="REGISTRATION_INVITE_CODE")
     arshin_backoff_seconds: float = Field(default=2.0, alias="ARSHIN_BACKOFF_SECONDS")
     arshin_year_sweep: bool = Field(default=False, alias="ARSHIN_YEAR_SWEEP")
 

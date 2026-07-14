@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -46,12 +46,19 @@ def get_current_user(
 
 
 @router.post("/auth/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(getdb)) -> TokenResponse:
-    """Саморегистрация. После регистрации пользователь сразу авторизован."""
+def register(payload: RegisterRequest, request: Request, db: Session = Depends(getdb)) -> TokenResponse:
+    """Саморегистрация по коду приглашения. После регистрации — сразу авторизован."""
+    from app.services.rate_limit import check_register_rate_limit
+
+    client_ip = request.client.host if request.client else "unknown"
+    check_register_rate_limit(client_ip)
+
     service = AuthService(db)
 
     try:
-        user = service.register_user(payload.email, payload.password, payload.full_name)
+        user = service.register_user(
+            payload.email, payload.password, payload.invite_code, payload.full_name,
+        )
     except RegistrationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 

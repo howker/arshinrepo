@@ -20,6 +20,10 @@
         <label for="full_name">Имя и фамилия</label>
         <input type="text" id="full_name" autocomplete="name">
       </div>
+      <div class="field" id="invite-field" style="display:none;">
+        <label for="invite_code">Код приглашения</label>
+        <input type="text" id="invite_code" autocomplete="off">
+      </div>
       <div class="field">
         <label for="email">Рабочая почта</label>
         <input type="email" id="email" required autocomplete="email">
@@ -50,6 +54,7 @@ function setMode(next) {
   $('tab-login').setAttribute('aria-selected', String(!isReg));
   $('tab-register').setAttribute('aria-selected', String(isReg));
   $('name-field').style.display = isReg ? 'block' : 'none';
+  $('invite-field').style.display = isReg ? 'block' : 'none';
   $('pw-hint').style.display = isReg ? 'block' : 'none';
   $('submit').textContent = isReg ? 'Создать учётную запись' : 'Войти';
   $('password').autocomplete = isReg ? 'new-password' : 'current-password';
@@ -66,8 +71,9 @@ $('form').addEventListener('submit', async () => {
   $('msg').innerHTML = '';
 
   const body = { email: $('email').value.trim(), password: $('password').value };
-  if (mode === 'register' && $('full_name').value.trim()) {
-    body.full_name = $('full_name').value.trim();
+  if (mode === 'register') {
+    if ($('full_name').value.trim()) body.full_name = $('full_name').value.trim();
+    body.invite_code = $('invite_code').value.trim();
   }
 
   try {

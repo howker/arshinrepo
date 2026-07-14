@@ -91,10 +91,16 @@ def run_job(
 ):
     """Запустить проверку.
 
+    Перед постановкой в очередь проверяется лимит одновременных задач
+    пользователя — защита общей пропускной способности Аршина.
+
     restart=True  — начать заново (единый срез данных Аршина).
     restart=False — продолжить с места остановки (не терять уже проверенное
                     и не нагружать Аршин повторными запросами).
     """
+    from app.services.rate_limit import check_active_jobs_limit
+    check_active_jobs_limit(db, current_user.id)
+
     job = run_job_for_user(db, current_user, job_id, restart=restart)
     return RunJobResponse(job_id=job.id, status=job.status)
 

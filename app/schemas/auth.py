@@ -14,6 +14,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, description="Минимум 8 символов")
     full_name: str | None = Field(default=None, max_length=255)
+    invite_code: str = Field(description="Код приглашения")
 
 
 class TokenResponse(BaseModel):
