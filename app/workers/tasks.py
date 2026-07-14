@@ -268,7 +268,10 @@ def process_excel_job(job_id_str: str, restart: bool = True) -> str:
                 # 3h. Сохраняем результат для аннотации
                 result_for_annot = {
                     'excel_row': device.get('excel_row'),
+                    'sheet_name': device.get('sheet_name'),
                     'device_kind': device.get('device_kind'),
+                    'cell_refs': device.get('cell_refs', {}),
+                    'link_column_exists': device.get('link_column_exists', True),
                     'issues': [
                         {
                             'cell_ref': issue.cell_ref,
